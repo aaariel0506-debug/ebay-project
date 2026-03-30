@@ -1,0 +1,121 @@
+# eBay Tax System — 配置文件模板
+# 复制本文件为 config.yaml 并填入实际信息
+# config.yaml 已加入 .gitignore，不会被提交
+
+# 数据库路径
+database: data/orders.db
+
+# 输出目录
+output_dir: data/outputs/
+
+# eBay 账户（用于 Playwright 自动截图）
+ebay:
+  username: YOUR_EBAY_USERNAME
+  # 密码不存配置文件，运行时会提示输入
+
+# eBay Developer API 凭据
+# 运行 `python main.py auth` 后会自动填充 access_token 和 refresh_token
+# 请先在 https://developer.ebay.com/my/keys 完成以下步骤：
+#   1. 在 "User Tokens" → "OAuth Redirect URL" 添加 http://localhost:8080/callback
+#   2. 记下 RuName（如 YourName-YourApp-Production-xxxxxxxx）
+ebay_api:
+  client_id: YOUR_APP_ID
+  client_secret: YOUR_CERT_ID
+  ru_name: YOUR_RU_NAME
+  access_token:    # 由 `python main.py auth` 自动填充
+  refresh_token:   # 由 `python main.py auth` 自动填充
+  expires_in: 7200
+
+# CPass 账户
+cpass:
+  username: YOUR_CPASS_USERNAME
+
+# ほぼ日ストア 账户
+# 推荐：第一次手动登录保存 session（session 保存在 data/sessions/hobonichi_session.json）
+# 之后系统会自动重用 session，无需再次输入密码
+# 如果账号密码填写，也会先尝试自动登录
+hobonichi:
+  username: YOUR_HOBONICHI_EMAIL    # ほぼ日ID（邮箱）
+  password: YOUR_HOBONICHI_PASSWORD # 密码（可选，留空则手动登录）
+  # 如果自动检测的选择器不对，在这里手动指定：
+  # selectors:
+  #   email_input: "input[name='email']"
+  #   password_input: "input[type='password']"
+  #   submit_button: "button[type='submit']"
+  #   order_row: ".order-item"
+  #   order_id: ".order-number"
+  #   order_date: ".order-date"
+  #   item_name: ".item-name"
+  #   total_price: ".total-price"
+  #   next_page: ".pagination-next"
+
+# Premium Bandai 账户
+# 登录通过 Bandai Namco ID（account.bandai.com）OAuth 跳转
+# 推荐：第一次手动登录保存 session（session 保存在 data/sessions/bandai_session.json）
+bandai:
+  username: YOUR_BANDAI_EMAIL       # Bandai Namco ID（邮箱）
+  password: YOUR_BANDAI_PASSWORD    # 密码（可选，留空则手动登录）
+  # selectors:
+  #   email_input: "#loginId"
+  #   password_input: "#password"
+  #   submit_button: ".login-btn"
+  #   order_row: ".order-list__item"
+  #   order_id: ".order-number"
+  #   order_date: ".order-date"
+  #   item_name: ".item-name"
+  #   total_price: ".total-price"
+  #   next_page: ".pagination__next"
+
+# 汇率设置
+currency:
+  base: USD
+  jpy_source: frankfurter   # frankfurter（自动获取）或 manual（手动固定汇率）
+  jpy_fixed_rate: null       # 若 source=manual，填入汇率，例如 150.0
+
+# 汇率 API 配置（用于 ingest/exchange_rate.py）
+exchange_rate:
+  fallback_jpy_usd: 150   # 网络不可用时使用此值（1 USD = X JPY）
+  cache_days: 30          # 未来扩展：磁盘缓存天数
+
+# 采购平台列名映射
+platform_columns:
+  amazon_jp:
+    date: "注文日"
+    item_name: "商品名称"
+    order_id: "注文番号"
+    total: "合計金額"
+    tax: "消費税"
+    quantity: "数量"
+    unit_price: "単価"
+  hobonichi:
+    date: "購入日"
+    item_name: "商品名"
+    order_id: "注文ID"
+    total: "合計"
+    tax: "税額"
+    quantity: "数量"
+    unit_price: "価格"
+  bandai:
+    date: "注文日時"
+    item_name: "商品名"
+    order_id: "受注番号"
+    total: "合計金額"
+    tax: "消費税"
+    quantity: "数量"
+    unit_price: "単価"
+
+# OCR 设置（线下领收书识别）
+ocr:
+  language: jpn
+  confidence_threshold: 60  # 低于此置信度的字段标记为 needs_review
+
+# 匹配引擎设置
+matching:
+  fuzzy_title_threshold: 85   # 商品名称模糊匹配阈值（%）
+  date_range_days: 30          # 采购日期与eBay成交日期的最大间隔（天）
+
+# Playwright 截图设置
+screenshot:
+  viewport_width: 1440
+  viewport_height: 900
+  timeout_ms: 30000

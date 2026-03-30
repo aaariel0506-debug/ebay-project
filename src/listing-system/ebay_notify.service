@@ -1,0 +1,26 @@
+# systemd 服务文件 — eBay 通知接收服务
+# 放到 /etc/systemd/system/ebay-notify.service
+#
+# 启用:
+#   sudo systemctl enable ebay-notify
+#   sudo systemctl start ebay-notify
+#   sudo systemctl status ebay-notify
+#   journalctl -u ebay-notify -f  (查看日志)
+
+[Unit]
+Description=eBay Notification Receiver
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/ebay_automation
+ExecStart=/usr/bin/python3 -m gunicorn notification_server:app -b 127.0.0.1:5000 -w 2 --timeout 5
+Restart=always
+RestartSec=5
+
+# 环境变量
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# 配置文件（包含敏感信息）
+config.json
+config.yaml
+*.local.json
+*.local.yaml
+ebay_config.json
+
+# 日志文件
+logs/*.log
+*.log
+
+# 数据文件
+data/inputs/
+data/outputs/
+data/*.db
+data/*.sqlite
+*.db
+*.sqlite
+
+# 临时文件
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 测试输出
+test_output/
+coverage/
+.pytest_cache/
+
+# 凭证文件夹
+src/tax-system/data/outputs/orders/

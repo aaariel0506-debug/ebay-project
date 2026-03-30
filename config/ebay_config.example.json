@@ -1,0 +1,11 @@
+{
+  "_comment": "eBay API 配置文件 - 复制此文件为 ebay_config.json 并填写真实信息",
+  
+  "EBAY_APP_ID": "你的 eBay App ID (Client ID)",
+  "EBAY_APP_SECRET": "你的 eBay App Secret (Client Secret)",
+  "EBAY_SITE_ID": "0",
+  "EBAY_MARKETPLACE_ID": "EBAY_US",
+  
+  "_note_site_id": "站点 ID: 0=US, 3=UK, 15=DE, 16=AU, 等",
+  "_note_env": "生产环境请修改脚本中的 EBAY_API_BASE 为 https://api.ebay.com"
+}

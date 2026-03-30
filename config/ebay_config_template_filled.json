@@ -1,0 +1,18 @@
+{
+  "_comment": "eBay API 配置文件 - 示例（填写你的真实密钥）",
+  "_setup_guide": "查看 ebay_developer_registration_guide.md 完成设置",
+  
+  "EBAY_APP_ID": "ABC12345-6789-ABCD-EFGH-123456789ABC",
+  "EBAY_APP_SECRET": "XYZ98765-4321-WXYZ-IJKL-987654321XYZ",
+  "EBAY_DEV_ID": "DEV12345-6789-ABCD-EFGH-123456789DEF",
+  "EBAY_SITE_ID": "0",
+  "EBAY_MARKETPLACE_ID": "EBAY_US",
+  
+  "EBAY_ENVIRONMENT": "sandbox",
+  
+  "SANDBOX_SELLER_USERNAME": "sbmc-st1234567890-seller",
+  "SANDBOX_SELLER_PASSWORD": "Test1234!",
+  "SANDBOX_SELLER_EMAIL": "sbmc-st1234567890-seller@...",
+  
+  "OAUTH_TOKEN": ""
+}
