@@ -15,7 +15,9 @@ jobs:
         run: pip install requests openpyxl flask pandas pyyaml click rich Pillow
         working-directory: src/listing-system
       - name: Run listing
-        run: python main.py
+        run: |
+          echo "=== Running main.py ==="
+          python main.py 2>&1 || echo "Exit code: $?"
         working-directory: src/listing-system
         env:
           EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
