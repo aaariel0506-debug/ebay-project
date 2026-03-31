@@ -8,50 +8,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Install dependencies
+      - name: Install deps
+        run: pip install requests openpyxl flask pandas pyyaml click rich Pillow
         working-directory: src/listing-system
-        run: pip install -r requirements.txt pyyaml click rich requests
-
-      - name: Test eBay API
-        working-directory: src/listing-system
-        env:
-          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
-          EBAY_APP_SECRET: ${{ secrets.EBAY_APP_SECRET }}
-          EBAY_USER_TOKEN: ${{ secrets.EBAY_USER_TOKEN }}
-          EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
-        run: |
-          python3 -c "
-import requests, base64, json
-
-CLIENT_ID = '${{ secrets.EBAY_APP_ID }}'
-CLIENT_SECRET = '${{ secrets.EBAY_APP_SECRET }}'
-REFRESH_TOKEN = '${{ secrets.EBAY_REFRESH_TOKEN }}'
-
-cred = base64.b64encode(f'{CLIENT_ID}:{CLIENT_SECRET}'.encode()).decode()
-r = requests.post('https://api.ebay.com/identity/v1/oauth2/token',
-    headers={'Content-Type':'application/x-www-form-urlencoded',
-             'Authorization':f'Basic {cred}'},
-    data={'grant_type':'refresh_token','refresh_token':REFRESH_TOKEN,
-          'scope':'https://api.ebay.com/oauth/api_scope/sell.fulfillment https://api.ebay.com/oauth/api_scope/sell.inventory'})
-print('Status:', r.status_code)
-data = r.json()
-if 'access_token' in data:
-    print('ACCESS_TOKEN OK')
-    at = data['access_token']
-    r2 = requests.get('https://api.ebay.com/sell/inventory/v1/inventory_item?limit=1',
-        headers={'Authorization': f'Bearer {at}'})
-    print('Inventory API:', r2.status_code)
-    print(r2.text[:300])
-else:
-    print('ERROR:', json.dumps(data))
-"
-
-      - name: Run main.py
+      - name: Run listing
+        run: python main.py
         working-directory: src/listing-system
         env:
           EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
@@ -59,4 +23,3 @@ else:
           EBAY_USER_TOKEN: ${{ secrets.EBAY_USER_TOKEN }}
           EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
           EBAY_ENVIRONMENT: production
-        run: python main.py
