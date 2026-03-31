@@ -17,34 +17,7 @@ jobs:
 
       - name: Create config.json
         working-directory: src/listing-system
-        run: |
-          python3 -c "
-import json, os
-config = {
-    'environment': 'production',
-    'production': {'api_base': 'https://api.ebay.com', 'web_base': 'https://www.ebay.com'},
-    'sandbox': {'api_base': 'https://api.sandbox.ebay.com', 'web_base': 'https://www.sandbox.ebay.com'},
-    'marketplace': {'marketplace_id': 'EBAY_US', 'currency': 'USD'},
-    'oauth': {
-        'user_token': os.environ.get('EBAY_USER_TOKEN', ''),
-        'refresh_token': os.environ.get('EBAY_REFRESH_TOKEN', '')
-    },
-    'business_policies': {
-        'payment_policy_id': '265656298018',
-        'fulfillment_policy_id': '266026679018',
-        'return_policy_id': '265656303018'
-    },
-    'listing_defaults': {
-        'auto_publish': False,
-        'condition': 'NEW',
-        'condition_id': '1000',
-        'format': 'FIXED_PRICE'
-    }
-}
-with open('config.json', 'w') as f:
-    json.dump(config, f, indent=2, ensure_ascii=False)
-print('config.json created')
-"
+        run: python3 scripts/make_config.py
         env:
           EBAY_USER_TOKEN: ${{ secrets.EBAY_USER_TOKEN }}
           EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
