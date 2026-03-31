@@ -13,7 +13,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install and Run
+      - name: Install dependencies
+        working-directory: src/listing-system
+        run: pip install -r requirements.txt pyyaml click rich
+
+      - name: Run listing
         working-directory: src/listing-system
         env:
           EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
@@ -21,6 +25,4 @@ jobs:
           EBAY_USER_TOKEN: ${{ secrets.EBAY_USER_TOKEN }}
           EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
           EBAY_ENVIRONMENT: production
-        run: |
-          pip install requests openpyxl flask pandas pyyaml click rich Pillow
-          python main.py
+        run: python main.py
