@@ -1,0 +1,52 @@
+name: eBay Listing Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      sku:
+        description: 'SKU to publish (leave empty to process all pending)'
+        required: false
+        default: ''
+      publish:
+        description: 'Publish immediately after creation (no review)'
+        type: boolean
+        default: false
+
+jobs:
+  publish-listing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[listing]"
+          pip install requests openpyxl flask pandas pyyaml click rich Pillow
+
+      - name: Run listing
+        working-directory: src/listing-system
+        env:
+          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
+          EBAY_APP_SECRET: ${{ secrets.EBAY_APP_SECRET }}
+          EBAY_USER_TOKEN: ${{ secrets.EBAY_USER_TOKEN }}
+          EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
+          EBAY_ENVIRONMENT: production
+        run: |
+          if [ "${{ github.event.inputs.publish }}" == "true" ]; then
+            python main.py --publish
+          else
+            python main.py
+          fi
+
+      - name: Upload output
+        if: always()
+        working-directory: src/listing-system
+        uses: actions/upload-artifact@v4
+        with:
+          name: listing-logs
+          path: logs/
