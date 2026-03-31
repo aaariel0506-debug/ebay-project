@@ -19,7 +19,7 @@ jobs:
         run: pip install requests openpyxl flask pandas pyyaml click rich Pillow
         working-directory: src/listing-system
 
-      - name: Run main.py (Steps 1-4)
+      - name: Run main.py
         working-directory: src/listing-system
         env:
           EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
@@ -29,81 +29,16 @@ jobs:
           EBAY_ENVIRONMENT: production
         run: python main.py
 
-      - name: Generate listing report HTML
-        working-directory: src/listing-system
-        run: |
-          python3 -c "
-import openpyxl
-from datetime import datetime
-wb = openpyxl.load_workbook('商品数据.xlsx')
-ws = wb.active
-rows = list(ws.iter_rows(values_only=True))
-headers = rows[0] if rows else []
-html = '<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Listing Report</title>'
-html += '<style>body{font-family:sans-serif;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f5f5f5}.success{color:green}.failed{color:red}</style>'
-html += '</head><body><h1>Listing Report - ' + datetime.now().strftime('%Y-%m-%d %H:%M') + '</h1>'
-html += '<table><tr>'
-for h in headers[:10]:
-    html += f'<th>{h}</th>'
-html += '</tr>'
-for row in rows[1:]:
-    if row[0]:
-        status = str(row[15]) if len(row) > 15 else ''
-        cls = 'success' if 'SUCCESS' in status else 'failed'
-        html += '<tr>'
-        for val in row[:10]:
-            html += f'<td class=\"{cls}\">{val}</td>'
-        html += '</tr>'
-html += '</table></body></html>'
-with open('output/listing_report.html', 'w', encoding='utf-8') as f:
-    f.write(html)
-print('Generated listing_report.html')
-"
-
       - name: Upload to Google Drive
         env:
           MATON_API_KEY: ${{ secrets.MATON_API_KEY }}
         run: |
           pip install requests 2>/dev/null
-          python3 -c "
-import os, json, urllib.request, glob
+          python3 /home/runner/work/ebay-project/ebay-project/src/listing-system/scripts/upload_drive.py
 
-key = os.environ.get('MATON_API_KEY', '')
-folder_id = '15h280yccE1bN4gzTuAM-QlxI1sCRqdGu'
-gateway = 'https://gateway.maton.ai/google-drive'
-
-def upload(path, name):
-    if not os.path.exists(path):
-        print(f'SKIP: {path}')
-        return
-    ext = os.path.splitext(path)[1].lower()
-    mime = {'.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            '.html': 'text/html'}.get(ext, 'application/octet-stream')
-    with open(path, 'rb') as f:
-        data = f.read()
-    boundary = '----FormBoundary7MA4YWxk'
-    meta = json.dumps({'Name': name, 'parents': [folder_id]}).encode()
-    body = f'--{boundary}\r\nContent-Type: application/json\r\n\r\n'.encode() + meta
-    body += f'\r\n--{boundary}\r\nContent-Type: {mime}\r\n\r\n'.encode() + data + f'\r\n--{boundary}--\r\n'.encode()
-    req = urllib.request.Request(f'{gateway}/upload/drive/v3/files?uploadType=multipart', data=body, method='POST')
-    req.add_header('Authorization', f'Bearer {key}')
-    req.add_header('Content-Type', f'multipart/related; boundary={boundary}')
-    try:
-        r = urllib.request.urlopen(req)
-        result = json.load(r)
-        print(f'OK: {name} -> {result.get(\"id\")}')
-    except Exception as e:
-        print(f'FAIL: {name} -> {e}')
-
-BASE = '/home/runner/work/ebay-project/ebay-project/src/listing-system'
-upload(f'{BASE}/商品数据.xlsx', '商品数据_结果.xlsx')
-for f in glob.glob(f'{BASE}/output/*.html'):
-    upload(f, os.path.basename(f))
-"
-
-      - name: Commit results back to repo
+      - name: Commit results
         run: |
           git config user.email "iron@openclaw.ai"
           git config user.name "Iron Bot"
           git add src/listing-system/商品数据.xlsx
-          git diff --cached --quiet || (git commit -m "chore: update listing results $(date +%Y-%m-%d)" && git push)
+          git diff --cached --quiet || (git commit -m "chore: update listing results" && git push)
