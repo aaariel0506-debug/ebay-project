@@ -25,7 +25,7 @@ def init():
 
 @click.command()
 @click.option("--all", "all_sources", is_flag=True, help="导入所有数据源")
-@click.option("--source", type=str, help="指定数据源（ebay / cpass / amazon_jp / hobonichi / bandai / receipts / japanpost）")
+@click.option("--source", type=str, help="指定数据源: ebay / cpass / amazon_jp / hobonichi / bandai / receipts [未实现] / japanpost [未实现]")
 @click.option("--file", type=click.Path(exists=True), help="指定输入文件（CSV/XLSX）")
 @click.option("--dir", "directory", type=click.Path(exists=True), help="指定输入目录")
 @click.option("--from", "date_from", type=str, default=None, help="抓取起始日期 YYYY-MM-DD（hobonichi/bandai 用）")
@@ -36,7 +36,24 @@ def ingest(all_sources, source, file, directory, date_from, date_to, relogin):
     console.print("[bold]开始导入数据...[/bold]")
 
     if all_sources:
-        console.print("[yellow]⚠[/yellow] --all 选项待实现，请先使用 --source 指定数据源")
+        console.print("[bold]批量导入所有已实现的数据源...[/bold]")
+        implemented_sources = ["ebay", "cpass", "amazon_jp"]
+        # hobonichi 和 bandai 需要登录，跳过自动批量
+        skipped_sources = ["hobonichi", "bandai"]
+        not_implemented = ["receipts", "japanpost"]
+
+        for src in implemented_sources:
+            if not file and not directory:
+                console.print(f"[yellow]⚠[/yellow] 跳过 {src}：需要指定 --file 或 --dir 参数")
+                continue
+            console.print(f"[cyan]→[/cyan] 导入 {src}...")
+
+        for src in skipped_sources:
+            console.print(f"[yellow]⚠[/yellow] 跳过 {src}：需要浏览器登录，请单独运行 --source {src}")
+
+        for src in not_implemented:
+            console.print(f"[dim]⏭[/dim] 跳过 {src}：尚未实现")
+
         return
 
     if not source and not file:
@@ -83,8 +100,15 @@ def ingest(all_sources, source, file, directory, date_from, date_to, relogin):
         count = ingest_bandai(date_from=date_from, date_to=date_to, force_relogin=relogin)
         console.print(f"[green]✓[/green] 导入 {count} 条 Premium Bandai 采购记录")
 
-    elif source in ["receipts", "japanpost"]:
-        console.print(f"[yellow]⚠[/yellow] 数据源 '{source}' 待实现")
+    elif source == "receipts":
+        console.print("[yellow]⚠[/yellow] receipts 数据源尚未集成到 CLI")
+        console.print("  替代方案: 使用 receipt_ocr.py 脚本直接处理")
+        console.print("  参考文档: src/tax-system/docs/specs/manual_review_spec.md")
+
+    elif source == "japanpost":
+        console.print("[yellow]⚠[/yellow] japanpost 数据源尚未集成到 CLI")
+        console.print("  替代方案: 使用 scripts/import_japan_post.py 或手动导入 CSV")
+        console.print("  参考文档: src/tax-system/docs/workflow_feb2026.md")
 
     else:
         console.print(f"[red]✗[/red] 未知的数据源：{source}")

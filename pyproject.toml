@@ -1,0 +1,62 @@
+[project]
+name = "ebay-project"
+version = "0.1.0"
+description = "eBay 店铺运营自动化系统 - Listing 自动化 + 税务报表一体化解决方案"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31.0",
+    "openpyxl>=3.1.0",
+    "pyyaml>=6.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "Pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+listing = [
+    "flask>=3.0.0",
+    "pandas>=2.0.0",
+]
+tax = [
+    "pandas>=2.0.0",
+    "pydantic>=2.0.0",
+    "pytesseract>=0.3.10",
+    "playwright>=1.40.0",
+    "rapidfuzz>=3.0.0",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.0",
+]
+all = [
+    "ebay-project[listing]",
+    "ebay-project[tax]",
+    "ebay-project[dev]",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "src/tax-system/tests",
+    "src/listing-system/tests",
+]
+pythonpath = [
+    "src/tax-system",
+    "src/listing-system",
+]
