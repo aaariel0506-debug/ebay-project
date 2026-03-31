@@ -1,0 +1,26 @@
+name: eBay Listing Final
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install and Run
+        working-directory: src/listing-system
+        env:
+          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
+          EBAY_APP_SECRET: ${{ secrets.EBAY_APP_SECRET }}
+          EBAY_USER_TOKEN: ${{ secrets.EBAY_USER_TOKEN }}
+          EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
+          EBAY_ENVIRONMENT: production
+        run: |
+          pip install requests openpyxl flask pandas pyyaml click rich Pillow
+          python main.py
