@@ -15,11 +15,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Create config.json
+      - name: Create config.json (with fresh token)
         working-directory: src/listing-system
         run: python3 scripts/make_config.py
         env:
-          EBAY_USER_TOKEN: ${{ secrets.EBAY_USER_TOKEN }}
+          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
+          EBAY_APP_SECRET: ${{ secrets.EBAY_APP_SECRET }}
           EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
 
       - name: Install dependencies
