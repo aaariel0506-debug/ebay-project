@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Generate config.json from environment variables
-- Refreshes access token automatically before each run
+Generate config.json from environment variables.
+For local runs: uses hardcoded credentials.
+For CI/CD: uses environment variables (EBAY_APP_ID, EBAY_APP_SECRET, EBAY_REFRESH_TOKEN).
 """
 import json, os, base64, urllib.request
 
-CLIENT_ID = os.environ.get("EBAY_APP_ID", "")
-CLIENT_SECRET = os.environ.get("EBAY_APP_SECRET", "")
-REFRESH_TOKEN = os.environ.get("EBAY_REFRESH_TOKEN", "")
+CLIENT_ID = os.environ.get("EBAY_APP_ID") or "Masakiyo-orderinf-PRD-0bf27a730-27144d91"
+CLIENT_SECRET = os.environ.get("EBAY_APP_SECRET") or "PRD-bf1f19d47086-ca52-47c9-9c59-7a2c"
+REFRESH_TOKEN = os.environ.get("EBAY_REFRESH_TOKEN") or "v^1.1#i^1#r^1#I^3#f^0#p^3#t^Ul4xMF83OjYzN0Q1MEI2NTU3RDc0NzREQUQxRjBFQzIwOEE2OUYzXzJfMSNFXjI2MA=="
 
 # Get fresh access token
 cred = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
