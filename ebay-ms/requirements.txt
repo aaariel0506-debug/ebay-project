@@ -1,0 +1,14 @@
+# eBay MS dependencies
+pydantic-settings>=2.0
+python-dotenv>=1.0
+keyring>=25.0
+keyrings.alt>=5.0
+cryptography>=41.0
+loguru>=0.7
+httpx>=0.25
+sqlalchemy>=2.0
+alembic>=1.13
+openpyxl>=3.1
+pandas>=2.0
+pre-commit>=3.5
+pycryptodome>=3.20
