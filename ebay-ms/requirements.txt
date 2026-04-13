@@ -12,3 +12,4 @@ openpyxl>=3.1
 pandas>=2.0
 pre-commit>=3.5
 pycryptodome>=3.20
+pytest>=8.0

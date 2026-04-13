@@ -50,6 +50,9 @@ Thumbs.db
 .tokens.enc
 *.token
 
+# detect-secrets baseline (auto-generated)
+.secrets.baseline
+
 # Test coverage
 htmlcov/
 .coverage
