@@ -46,7 +46,6 @@ class Product(Base, TimestampMixin):
     )
 
     __table_args__ = (
-        Index("ix_products_sku", "sku"),
         Index("ix_products_status", "status"),
         Index("ix_products_category", "category"),
     )
