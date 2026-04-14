@@ -1,194 +1,184 @@
 """
-core/ebay_api/client.py
-eBay 统一 HTTP 客户端
-- 自动附加 Bearer token
-- 401 自动刷新重试
-- 429 指数退避
-- 5xx 重试（最多 3 次）
-- 统一日志
+core/ebay_api/client.py — eBay API Async HTTP Client
+
+基于 httpx.AsyncClient 的异步 eBay API 客户端。
+- 自动注入 Bearer Token
+- 401 自动重试（Token 刷新后）
+- 统一错误处理
 """
-import time
-from typing import Any
+from __future__ import annotations
 
 import httpx
+from typing import Any
 from core.config.settings import settings
 from core.ebay_api.auth import ebay_auth
-from core.ebay_api.exceptions import (
-    EbayApiError,
-    EbayAuthError,
-    EbayNotFoundError,
-    EbayRateLimitError,
-    EbayServerError,
-)
-from loguru import logger
 
-_DEFAULT_TIMEOUT = 30.0
-_MAX_RETRIES = 3
-_BACKOFF_BASE = 2  # 退避基数（秒）
+
+class EbayApiError(Exception):
+    """API 错误异常"""
+
+    def __init__(self, status_code: int, body: Any, message: str = ""):
+        self.status_code = status_code
+        self.body = body
+        self.message = message or f"API error {status_code}"
+        super().__init__(self.message)
 
 
 class EbayClient:
     """
-    eBay REST API 统一客户端。
+    异步 eBay API 客户端。
 
-    用法：
-        client = EbayClient()
-        data = client.get("/sell/inventory/v1/inventory_item", params={"limit": 10})
+    用法示例::
+
+        async with EbayClient() as client:
+            resp = await client.get("/sell/inventory/v1/inventory_item/SKU001")
+            if resp.is_success:
+                print(resp.data)
+            else:
+                print(resp.error)
     """
 
-    def __init__(self, timeout: float = _DEFAULT_TIMEOUT):
-        self._timeout = timeout
+    def __init__(
+        self,
+        *,
+        marketplace_id: str = "EBAY_US",
+        timeout: float = 60.0,
+    ):
+        self.marketplace_id = marketplace_id
+        self.timeout = timeout
+        self._client: httpx.AsyncClient | None = None
 
-    # ── 公开 HTTP 方法 ───────────────────────────────────
+    @property
+    def api_base(self) -> str:
+        if settings.EBAY_ENV == "sandbox":
+            return "https://api.sandbox.ebay.com"
+        return "https://api.ebay.com"
 
-    def get(self, path: str, **kwargs) -> dict[str, Any]:
-        return self._request("GET", path, **kwargs)
+    async def __aenter__(self):
+        self._client = httpx.AsyncClient(
+            base_url=self.api_base,
+            timeout=httpx.Timeout(self.timeout),
+        )
+        return self
 
-    def post(self, path: str, **kwargs) -> dict[str, Any]:
-        return self._request("POST", path, **kwargs)
+    async def __aexit__(self, *args):
+        if self._client:
+            await self._client.aclose()
 
-    def put(self, path: str, **kwargs) -> dict[str, Any]:
-        return self._request("PUT", path, **kwargs)
+    def _build_headers(self) -> dict:
+        headers = ebay_auth.get_headers()
+        headers["X-EBAY-C-MARKETPLACE-ID"] = self.marketplace_id
+        return headers
 
-    def delete(self, path: str, **kwargs) -> dict[str, Any]:
-        return self._request("DELETE", path, **kwargs)
-
-    # ── 核心请求逻辑 ─────────────────────────────────────
-
-    def _request(
+    async def _request(
         self,
         method: str,
         path: str,
         *,
-        params: dict | None = None,
-        json_body: dict | None = None,
-        headers: dict | None = None,
-        retry_count: int = 0,
-    ) -> dict[str, Any]:
+        data: dict | None = None,
+        retries: int = 1,
+    ) -> ApiResponse:
         """
-        发送请求，处理认证、重试、异常。
+        统一请求方法，自动处理 401 重试。
 
         Args:
-            path: API 路径（如 /sell/inventory/v1/inventory_item）
-            params: URL 查询参数
-            json_body: JSON 请求体
-            headers: 额外 headers（会合并到默认 headers）
-            retry_count: 当前重试次数（内部用）
+            method: HTTP 方法
+            path: API 路径，如 /sell/inventory/v1/inventory_item/SKU001
+            data: 请求体 dict
+            retries: 401 重试次数
+
+        Returns:
+            ApiResponse 对象
         """
-        url = f"{settings.ebay_api_url}{path}"
-        req_headers = self._build_headers(headers)
+        if not self._client:
+            raise RuntimeError("EbayClient must be used as async context manager")
 
-        logger.debug("{} {} (retry={})", method, path, retry_count)
+        for attempt in range(retries + 1):
+            headers = self._build_headers()
 
-        try:
-            resp = httpx.request(
-                method,
-                url,
-                params=params,
-                json=json_body,
-                headers=req_headers,
-                timeout=self._timeout,
+            try:
+                resp = await self._client.request(
+                    method=method,
+                    url=path,
+                    headers=headers,
+                    json=data,
+                )
+            except httpx.RequestError as e:
+                return ApiResponse(success=False, status_code=0, data=None, error=str(e))
+
+            # 2xx 成功
+            if resp.status_code < 400:
+                body = None
+                if resp.text:
+                    try:
+                        body = resp.json()
+                    except ValueError:
+                        body = resp.text
+                return ApiResponse(
+                    success=True,
+                    status_code=resp.status_code,
+                    data=body,
+                    error="",
+                )
+
+            # 401: Token 过期，强制刷新后重试
+            if resp.status_code == 401 and attempt < retries:
+                ebay_auth.get_token(force_refresh=True)
+                continue
+
+            # 其他错误
+            error_body = None
+            try:
+                error_body = resp.json()
+            except ValueError:
+                error_body = resp.text
+            return ApiResponse(
+                success=False,
+                status_code=resp.status_code,
+                data=error_body,
+                error=str(error_body)[:300],
             )
-        except httpx.HTTPError as exc:
-            if retry_count < _MAX_RETRIES:
-                wait = _BACKOFF_BASE ** retry_count
-                logger.warning("网络错误，{}秒后重试 ({}/{}): {}", wait, retry_count + 1, _MAX_RETRIES, exc)
-                time.sleep(wait)
-                return self._request(method, path, params=params, json_body=json_body,
-                                     headers=headers, retry_count=retry_count + 1)
-            raise EbayApiError(f"网络请求失败: {exc}") from exc
 
-        return self._handle_response(resp, method, path, params, json_body, headers, retry_count)
+    # ── 便捷方法 ──────────────────────────────────────
 
-    def _handle_response(
+    async def get(self, path: str, **kwargs) -> ApiResponse:
+        return await self._request("GET", path, **kwargs)
+
+    async def post(self, path: str, data: dict | None = None, **kwargs) -> ApiResponse:
+        return await self._request("POST", path, data=data, **kwargs)
+
+    async def put(self, path: str, data: dict | None = None, **kwargs) -> ApiResponse:
+        return await self._request("PUT", path, data=data, **kwargs)
+
+    async def delete(self, path: str, **kwargs) -> ApiResponse:
+        return await self._request("DELETE", path, **kwargs)
+
+    # ── 连接测试 ──────────────────────────────────────
+
+    async def test_connection(self) -> bool:
+        """测试 API 连接（用 application token 读库存）"""
+        resp = await self.get("/sell/inventory/v1/inventory_item?limit=1")
+        return resp.success
+
+
+class ApiResponse:
+    """API 响应封装"""
+
+    def __init__(
         self,
-        resp: httpx.Response,
-        method: str,
-        path: str,
-        params: dict | None,
-        json_body: dict | None,
-        headers: dict | None,
-        retry_count: int,
-    ) -> dict[str, Any]:
-        """根据状态码分发处理"""
-        status = resp.status_code
+        success: bool,
+        status_code: int,
+        data: Any,
+        error: str,
+    ):
+        self.success = success
+        self.status_code = status_code
+        self.data = data
+        self.error = error
 
-        # ── 成功 ─────────────────────────────────────────
-        if 200 <= status < 300:
-            # 204 No Content 等无 body 的响应
-            if status == 204 or not resp.text.strip():
-                return {}
-            return resp.json()
+    @property
+    def is_success(self) -> bool:
+        return self.success
 
-        # ── 401 → 刷新 token 重试一次 ────────────────────
-        if status == 401:
-            if retry_count == 0:
-                logger.warning("收到 401，尝试刷新 access_token 后重试")
-                ebay_auth.get_access_token(force_refresh=True)
-                return self._request(method, path, params=params, json_body=json_body,
-                                     headers=headers, retry_count=retry_count + 1)
-            raise EbayAuthError(
-                f"认证失败 (已重试): {path}",
-                status_code=status,
-                response_body=resp.text,
-            )
-
-        # ── 404 ──────────────────────────────────────────
-        if status == 404:
-            raise EbayNotFoundError(
-                f"资源不存在: {path}",
-                status_code=status,
-                response_body=resp.text,
-            )
-
-        # ── 429 → 退避重试 ──────────────────────────────
-        if status == 429:
-            retry_after = int(resp.headers.get("Retry-After", _BACKOFF_BASE ** retry_count))
-            if retry_count < _MAX_RETRIES:
-                logger.warning("触发限流，等待 {}秒后重试 ({}/{})", retry_after, retry_count + 1, _MAX_RETRIES)
-                time.sleep(retry_after)
-                return self._request(method, path, params=params, json_body=json_body,
-                                     headers=headers, retry_count=retry_count + 1)
-            raise EbayRateLimitError(
-                f"限流未恢复: {path}",
-                retry_after=retry_after,
-                status_code=status,
-                response_body=resp.text,
-            )
-
-        # ── 5xx → 重试 ──────────────────────────────────
-        if status >= 500:
-            if retry_count < _MAX_RETRIES:
-                wait = _BACKOFF_BASE ** retry_count
-                logger.warning("服务器错误 [{}]，{}秒后重试 ({}/{})", status, wait, retry_count + 1, _MAX_RETRIES)
-                time.sleep(wait)
-                return self._request(method, path, params=params, json_body=json_body,
-                                     headers=headers, retry_count=retry_count + 1)
-            raise EbayServerError(
-                f"服务器持续错误: {path}",
-                status_code=status,
-                response_body=resp.text,
-            )
-
-        # ── 其他 4xx ─────────────────────────────────────
-        raise EbayApiError(
-            f"请求失败 [{status}]: {path}",
-            status_code=status,
-            response_body=resp.text,
-        )
-
-    def _build_headers(self, extra: dict | None = None) -> dict[str, str]:
-        """构建请求头：Bearer token + Content-Type + 额外 headers"""
-        token = ebay_auth.get_access_token()
-        h = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        if extra:
-            h.update(extra)
-        return h
-
-
-# 全局单例
-ebay_client = EbayClient()
+    def __repr__(self) -> str:
+        return f"<ApiResponse {self.status_code} success={self.success}>"
