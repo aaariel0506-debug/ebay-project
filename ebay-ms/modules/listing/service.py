@@ -166,7 +166,7 @@ class ListingService:
         body = {k: v for k, v in body.items() if v is not None}
 
         self.client.put(
-            "/inventory_item/{sku}".format(sku=req.sku),
+            "/sell/inventory/v1/inventory_item/{sku}".format(sku=req.sku),
             json_body=body,
         )
         return InventoryItemResponse(sku=req.sku, status="inventory_item_created")
@@ -193,7 +193,7 @@ class ListingService:
         if policies:
             body["listingPolicies"] = policies
 
-        resp = self.client.post("/offer", json_body=body)
+        resp = self.client.post("/sell/inventory/v1/offer", json_body=body)
         offer_id = resp.get("offerId")
         if not offer_id:
             raise ListingCreateError("createOffer", "响应中没有 offerId", resp)
@@ -201,7 +201,7 @@ class ListingService:
 
     def _publish_offer(self, offer_id: str) -> str:
         """Step 3: POST /offer/{offer_id}/publish → 返回 listing_id"""
-        resp = self.client.post(f"/offer/{offer_id}/publish", json_body={})
+        resp = self.client.post(f"/sell/inventory/v1/offer/{offer_id}/publish", json_body={})
         listing_id = (
             resp.get("listingId")
             or extract_listing_id_from_href(resp.get("listingIdHref"))
@@ -214,7 +214,7 @@ class ListingService:
     def _rollback_inventory_item(self, sku: str) -> None:
         """回滚：删除已创建的 inventory item"""
         try:
-            self.client.delete(f"/inventory_item/{sku}")
+            self.client.delete(f"/sell/inventory/v1/inventory_item/{sku}")
             log.info(f"Rollback Step 1 完成: 已删除 inventory_item/{sku}")
         except Exception as exc:
             log.warning(f"Rollback Step 1 失败（已尽力）: {exc}")

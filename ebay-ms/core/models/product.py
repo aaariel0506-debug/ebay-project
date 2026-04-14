@@ -11,7 +11,7 @@ from sqlalchemy import Enum, Index, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 
-class ProductStatus(str, enum.Enum):
+class ProductStatus(enum.StrEnum):
     ACTIVE = "active"
     DISCONTINUED = "discontinued"
     OUT_OF_STOCK = "out_of_stock"

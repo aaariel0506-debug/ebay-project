@@ -10,28 +10,24 @@ from typing import Final
 # 参考：https://developer.ebay.com/api-docs/common/rate-limits.html
 RATE_LIMITS: Final[dict[str, int]] = {
     # Sell Inventory API
-    "POST /sell/inventory/v1/inventory_item": 10000,
-    "GET /sell/inventory/v1/inventory_item": 10000,
-    "PUT /sell/inventory/v1/inventory_item": 10000,
-    "DELETE /sell/inventory/v1/inventory_item": 10000,
+    "/sell/inventory/v1/inventory_item": 10000,
 
     # Sell Fulfillment API
-    "GET /sell/fulfillment/v1/order": 10000,
-    "GET /sell/fulfillment/v1/order/": 10000,
+    "/sell/fulfillment/v1/order": 10000,
+    "/sell/fulfillment/v1/order/": 10000,
 
     # Sell Account API
-    "GET /sell/account/v1/": 5000,
+    "/sell/account/v1/": 5000,
 
     # Sell Finances API
-    "GET /sell/finances/v1/": 5000,
+    "/sell/finances/v1/": 5000,
 
     # Browse API（Application Token，限额通常较大）
     "GET /buy/browse/v1/": 5000,
     "GET /buy/deal/v1/": 5000,
 
     # Marketing API
-    "GET /sell/marketing/v1/": 5000,
-    "POST /sell/marketing/v1/": 5000,
+    "/sell/marketing/v1/": 5000,
 
     # 多用途匹配（未知 endpoint 用默认值）
 }

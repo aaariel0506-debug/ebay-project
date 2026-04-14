@@ -89,7 +89,7 @@ class RateLimiter:
     """
     eBay API 限流器。
 
-    加载限流配置（config/ebay_rate_limits.yaml），追踪每日调用，
+    加载限流配置（硬编码字典），追踪每日调用，
     达到阈值时警告或拒绝。
     """
 
