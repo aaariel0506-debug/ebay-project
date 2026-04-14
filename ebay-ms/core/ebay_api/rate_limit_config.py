@@ -23,8 +23,8 @@ RATE_LIMITS: Final[dict[str, int]] = {
     "/sell/finances/v1/": 5000,
 
     # Browse API（Application Token，限额通常较大）
-    "GET /buy/browse/v1/": 5000,
-    "GET /buy/deal/v1/": 5000,
+    "/buy/browse/v1/": 5000,
+    "/buy/deal/v1/": 5000,
 
     # Marketing API
     "/sell/marketing/v1/": 5000,
