@@ -47,6 +47,7 @@ def get_session_factory():
             bind=get_engine(),
             autocommit=False,
             autoflush=False,
+            expire_on_commit=False,
         )
     return _SessionLocal
 
@@ -70,3 +71,4 @@ def get_session() -> Session:
         raise
     finally:
         session.close()
+
