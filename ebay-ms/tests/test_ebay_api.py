@@ -3,15 +3,7 @@ tests/test_ebay_api.py
 Day 3 — eBay API 封装层单元测试
 
 测试覆盖：
-  1. 异常层级关系
-  2. OAuth 刷新成功 → access_token 返回
-  3. OAuth 刷新失败 → 抛 EbayAuthError
-  4. refresh_token 缺失 → 抛 EbayTokenMissingError
-  5. client GET 200 → 返回 JSON
-  6. client 401 → 自动刷新重试
-  7. client 429 → 退避重试
-  8. client 404 → EbayNotFoundError
-  9. client 500 → EbayServerError（重试耗尽后）
+  异常类 3 个 + Auth 5 个 + Client 6 个 = 14 个测试
 """
 import time
 from unittest.mock import MagicMock, patch
@@ -30,7 +22,6 @@ from core.ebay_api.exceptions import (
 
 
 class TestExceptions:
-    """异常继承关系 + 属性"""
 
     def test_hierarchy(self):
         assert issubclass(EbayAuthError, EbayApiError)
@@ -53,25 +44,23 @@ class TestExceptions:
 
 
 class TestEbayAuth:
-    """OAuth 刷新逻辑（mock HTTP + token_store）"""
 
     def _make_auth(self):
-        """创建干净的 EbayAuth 实例（不触发 keyring 加载）"""
+        """创建干净的 EbayAuth 实例"""
         with patch("core.ebay_api.auth.token_store") as mock_store:
             mock_store.get_token.return_value = None
             from core.ebay_api.auth import EbayAuth
             auth = EbayAuth()
         return auth
 
-    def test_refresh_success(self):
+    def test_user_token_refresh_success(self):
         auth = self._make_auth()
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
-            "access_token": "v^1.1#new_token",
+            "access_token": "v^1.1#new_user_token",
             "expires_in": 7200,
-            "token_type": "User Access Token",
         }
 
         with (
@@ -80,15 +69,27 @@ class TestEbayAuth:
         ):
             mock_store.get_token.side_effect = lambda key: {
                 "ebay_refresh_token": "v^1.1#refresh_xxx",
-                "ebay_access_token": None,
-                "ebay_token_expires_at": None,
             }.get(key)
 
-            token = auth.get_access_token(force_refresh=True)
+            token = auth.get_user_token(force_refresh=True)
 
-        assert token == "v^1.1#new_token"
-        # 验证 token 被持久化
+        assert token == "v^1.1#new_user_token"
         assert mock_store.save_token.call_count == 2  # access + expires
+
+    def test_app_token_success(self):
+        auth = self._make_auth()
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "access_token": "v^1.1#app_token",
+            "expires_in": 7200,
+        }
+
+        with patch("core.ebay_api.auth.httpx.post", return_value=mock_resp):
+            token = auth.get_app_token()
+
+        assert token == "v^1.1#app_token"
 
     def test_refresh_failure_raises(self):
         auth = self._make_auth()
@@ -104,8 +105,8 @@ class TestEbayAuth:
             mock_store.get_token.side_effect = lambda key: (
                 "v^1.1#old_refresh" if key == "ebay_refresh_token" else None
             )
-            with pytest.raises(EbayAuthError, match="OAuth 刷新失败"):
-                auth.get_access_token(force_refresh=True)
+            with pytest.raises(EbayAuthError, match="OAuth 失败"):
+                auth.get_user_token(force_refresh=True)
 
     def test_missing_refresh_token_raises(self):
         auth = self._make_auth()
@@ -113,16 +114,14 @@ class TestEbayAuth:
         with patch("core.ebay_api.auth.token_store") as mock_store:
             mock_store.get_token.return_value = None
             with pytest.raises(EbayTokenMissingError, match="Refresh token 未找到"):
-                auth.get_access_token()
+                auth.get_user_token()
 
     def test_cached_token_reused(self):
-        """未过期的 access_token 直接返回，不发 HTTP"""
         auth = self._make_auth()
-        auth._access_token = "cached_token"
-        auth._expires_at = time.time() + 3600  # 1 小时后才过期
+        auth._user_token = "cached_token"
+        auth._user_expires_at = time.time() + 3600
 
-        # 不 mock httpx —— 如果代码发了请求会报错
-        token = auth.get_access_token()
+        token = auth.get_user_token()
         assert token == "cached_token"
 
 
@@ -130,7 +129,6 @@ class TestEbayAuth:
 
 
 class TestEbayClient:
-    """HTTP 客户端逻辑（mock auth + httpx）"""
 
     def _make_client(self):
         from core.ebay_api.client import EbayClient
@@ -139,7 +137,7 @@ class TestEbayClient:
     @patch("core.ebay_api.client.ebay_auth")
     @patch("core.ebay_api.client.httpx.request")
     def test_get_200(self, mock_request, mock_auth):
-        mock_auth.get_access_token.return_value = "test_token"
+        mock_auth.get_user_token.return_value = "test_token"
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.text = '{"items":[]}'
@@ -150,14 +148,13 @@ class TestEbayClient:
         result = client.get("/sell/inventory/v1/inventory_item", params={"limit": 10})
 
         assert result == {"items": []}
-        # 验证 Bearer header
         call_kwargs = mock_request.call_args
         assert "Bearer test_token" in call_kwargs.kwargs["headers"]["Authorization"]
 
     @patch("core.ebay_api.client.ebay_auth")
     @patch("core.ebay_api.client.httpx.request")
     def test_401_triggers_refresh(self, mock_request, mock_auth):
-        mock_auth.get_access_token.return_value = "refreshed_token"
+        mock_auth.get_user_token.return_value = "refreshed_token"
 
         resp_401 = MagicMock()
         resp_401.status_code = 401
@@ -174,13 +171,13 @@ class TestEbayClient:
         result = client.get("/test")
 
         assert result == {"ok": True}
-        mock_auth.get_access_token.assert_any_call(force_refresh=True)
+        mock_auth.get_user_token.assert_any_call(force_refresh=True)
 
-    @patch("core.ebay_api.client.time.sleep")  # 避免真等
+    @patch("core.ebay_api.client.time.sleep")
     @patch("core.ebay_api.client.ebay_auth")
     @patch("core.ebay_api.client.httpx.request")
     def test_429_retries(self, mock_request, mock_auth, mock_sleep):
-        mock_auth.get_access_token.return_value = "token"
+        mock_auth.get_user_token.return_value = "token"
 
         resp_429 = MagicMock()
         resp_429.status_code = 429
@@ -203,7 +200,7 @@ class TestEbayClient:
     @patch("core.ebay_api.client.ebay_auth")
     @patch("core.ebay_api.client.httpx.request")
     def test_404_raises(self, mock_request, mock_auth):
-        mock_auth.get_access_token.return_value = "token"
+        mock_auth.get_user_token.return_value = "token"
 
         resp = MagicMock()
         resp.status_code = 404
@@ -218,25 +215,23 @@ class TestEbayClient:
     @patch("core.ebay_api.client.ebay_auth")
     @patch("core.ebay_api.client.httpx.request")
     def test_500_retries_then_raises(self, mock_request, mock_auth, mock_sleep):
-        mock_auth.get_access_token.return_value = "token"
+        mock_auth.get_user_token.return_value = "token"
 
         resp_500 = MagicMock()
         resp_500.status_code = 500
         resp_500.text = "Internal Server Error"
-        # 4 次都是 500（初始 + 3 次重试）
         mock_request.return_value = resp_500
 
         client = self._make_client()
         with pytest.raises(EbayServerError):
             client.get("/broken")
 
-        # 验证重试了 3 次
         assert mock_sleep.call_count == 3
 
     @patch("core.ebay_api.client.ebay_auth")
     @patch("core.ebay_api.client.httpx.request")
     def test_204_returns_empty(self, mock_request, mock_auth):
-        mock_auth.get_access_token.return_value = "token"
+        mock_auth.get_user_token.return_value = "token"
 
         resp = MagicMock()
         resp.status_code = 204
