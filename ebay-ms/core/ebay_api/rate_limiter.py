@@ -9,14 +9,12 @@ core/ebay_api/rate_limiter.py — eBay API 限流控制
 - 每日零点自动重置（UTC）
 """
 import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from loguru import logger
-
 from core.config.settings import settings
 from core.ebay_api.exceptions import EbayRateLimitError
+from loguru import logger
 
 # 默认限流值（次/天），可被配置文件覆盖
 DEFAULT_DAILY_LIMIT = 5000

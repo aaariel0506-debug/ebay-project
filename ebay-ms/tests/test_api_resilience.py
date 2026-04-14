@@ -7,19 +7,16 @@ tests/test_api_resilience.py — API 弹性测试套件
 3. 缓存命中
 4. 离线降级模式
 """
-import json
+import sqlite3
 import tempfile
 import time
-import sqlite3
 from pathlib import Path
-from unittest.mock import MagicMock, patch, ANY
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 from core.ebay_api.cache import ResponseCache
 from core.ebay_api.exceptions import EbayRateLimitError
 from core.ebay_api.rate_limiter import RateLimiter, RateLimitStore
-
 
 # ── 1. 重试机制测试 ─────────────────────────────────────
 
@@ -100,11 +97,11 @@ def test_rate_limiter_reject_at_95_percent():
         conn.execute("INSERT OR REPLACE INTO rate_counts VALUES ('GET /sell/test', ?, 950)", (today,))
         conn.commit()
 
-    l = RateLimiter(s)
-    l._limits = {"GET /sell/test": 1000}
+    limiter = RateLimiter(s)
+    limiter._limits = {"GET /sell/test": 1000}
 
     with pytest.raises(EbayRateLimitError):
-        l.check("GET /sell/test")
+        limiter.check("GET /sell/test")
 
     Path(tmp.name).unlink()
 

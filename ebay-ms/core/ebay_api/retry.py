@@ -12,9 +12,8 @@ import random
 import time
 from typing import Callable, TypeVar
 
-from loguru import logger
-
 from core.ebay_api.exceptions import EbayServerError
+from loguru import logger
 
 F = TypeVar("F")
 

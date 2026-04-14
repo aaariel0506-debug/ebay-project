@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-
 from core.config.settings import settings
 from core.ebay_api.auth import ebay_auth
 from core.ebay_api.cache import ResponseCache, get_response_cache
@@ -171,7 +170,7 @@ class EbayClient:
                 self._do_request(method, path, params=p, json_body=b, use_user_token=bool(use_user_token))
                 self._pending_store.mark_done(id)
                 logger.debug("pending 已处理: {} {}", method, path)
-            except Exception as exc:
+            except Exception:
                 logger.warning("pending 处理失败 [{}]: {} {}", id, method, path)
                 break  # 失败暂停，避免无限循环
 

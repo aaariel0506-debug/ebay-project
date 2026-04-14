@@ -134,8 +134,9 @@ class TestEbayClient:
     def _make_client(self):
         """用 __new__ 创建 + 干净缓存实例，绕过全局单例状态"""
         import threading
-        from core.ebay_api.client import EbayClient
+
         from core.ebay_api.cache import ResponseCache
+        from core.ebay_api.client import EbayClient
 
         c = EbayClient.__new__(EbayClient)
         c._timeout = 5.0

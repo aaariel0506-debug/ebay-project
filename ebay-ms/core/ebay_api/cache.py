@@ -14,8 +14,6 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
-from loguru import logger
-
 DEFAULT_TTL_SECONDS = 300  # 5 分钟
 
 
