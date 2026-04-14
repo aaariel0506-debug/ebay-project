@@ -128,11 +128,25 @@ class TestEbayAuth:
 # ── Client 测试 ───────────────────────────────────────────
 
 
+
 class TestEbayClient:
 
     def _make_client(self):
+        """用 __new__ 创建 + 干净缓存实例，绕过全局单例状态"""
+        import threading
         from core.ebay_api.client import EbayClient
-        return EbayClient(timeout=5.0)
+        from core.ebay_api.cache import ResponseCache
+
+        c = EbayClient.__new__(EbayClient)
+        c._timeout = 5.0
+        c._marketplace_id = "EBAY_US"
+        c._cache = ResponseCache(default_ttl=60)  # 独立干净实例，stats 从零开始
+        c._rate_limiter = MagicMock()
+        c._pending_store = MagicMock()
+        c._is_online = True
+        c._consecutive_failures = 0
+        c._pending_lock = threading.RLock()
+        return c
 
     @patch("core.ebay_api.client.ebay_auth")
     @patch("core.ebay_api.client.httpx.request")
@@ -241,3 +255,5 @@ class TestEbayClient:
         client = self._make_client()
         result = client.delete("/some-resource")
         assert result == {}
+
+
