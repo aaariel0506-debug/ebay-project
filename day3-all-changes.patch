@@ -1,0 +1,1145 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 3e415e9..94526ad 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -3,8 +3,13 @@ name: CI
+ on:
+   push:
+     branches: [main]
++    paths:
++      - "ebay-ms/**"
++      - ".github/workflows/ci.yml"
+   pull_request:
+     branches: [main]
++    paths:
++      - "ebay-ms/**"
+ 
+ jobs:
+   lint:
+@@ -17,7 +22,7 @@ jobs:
+       - name: Install ruff
+         run: pip install ruff
+       - name: Run ruff check
+-        run: ruff check src/ scripts/ --config pyproject.toml
++        run: ruff check ebay-ms/ --target-version py311 --select E,F,W,I --ignore E501
+ 
+   test:
+     runs-on: ubuntu-latest
+@@ -30,9 +35,8 @@ jobs:
+         with:
+           python-version: ${{ matrix.python-version }}
+       - name: Install dependencies
+-        run: |
+-          pip install -e ".[all]"
+-      - name: Run tax-system tests
+-        run: pytest src/tax-system/tests/ -v --tb=short
+-      - name: Run listing-system tests
+-        run: pytest src/listing-system/tests/ -v --tb=short
++        working-directory: ebay-ms
++        run: pip install -r requirements.txt
++      - name: Run tests
++        working-directory: ebay-ms
++        run: PYTHONPATH=. pytest tests/ -v --tb=short
+diff --git a/.github/workflows/listing_final.yml b/.github/workflows/listing_final.yml
+deleted file mode 100644
+index 1570f71..0000000
+--- a/.github/workflows/listing_final.yml
++++ /dev/null
+@@ -1,138 +0,0 @@
+-name: eBay Listing Publish
+-
+-on:
+-  workflow_dispatch:
+-
+-jobs:
+-  publish-listing:
+-    runs-on: ubuntu-latest
+-    steps:
+-      - uses: actions/checkout@v4
+-
+-      - uses: actions/setup-python@v5
+-        with:
+-          python-version: "3.11"
+-
+-      # ─── Step 1-3: 运行 main.py ───────────────────
+-      - name: Install dependencies
+-        run: pip install requests openpyxl flask pandas pyyaml click rich Pillow
+-        working-directory: src/listing-system
+-
+-      - name: Run listing (Steps 1-4)
+-        working-directory: src/listing-system
+-        env:
+-          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
+-          EBAY_APP_SECRET: ${{ secrets.EBAY_APP_SECRET }}
+-          EBAY_USER_TOKEN: ${{ secrets.EBAY_USER_TOKEN }}
+-          EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
+-          EBAY_ENVIRONMENT: production
+-        run: |
+-          echo "=== Running main.py ==="
+-          python main.py
+-          echo "Exit code: $?"
+-
+-      # ─── Step 5: 生成 Listing HTML ─────────────────
+-      - name: Generate listing HTML
+-        working-directory: src/listing-system
+-        run: |
+-          # Generate a simple listing summary HTML from the Excel results
+-          python3 -c "
+-import openpyxl
+-from datetime import datetime
+-wb = openpyxl.load_workbook('商品数据.xlsx')
+-ws = wb.active
+-rows = list(ws.iter_rows(values_only=True))
+-headers = rows[0] if rows else []
+-html = '''<!DOCTYPE html>
+-<html><head><meta charset=\"UTF-8\"><title>Listing Report</title>
+-<style>
+-body { font-family: sans-serif; padding: 20px; }
+-table { border-collapse: collapse; width: 100%; }
+-th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+-th { background: #f5f5f5; }
+-.success { color: green; }
+-.failed { color: red; }
+-</style></head>
+-<body>
+-<h1>Listing Report - ''' + datetime.now().strftime('%Y-%m-%d %H:%M') + '''</h1>
+-<table><tr>'''
+-for h in headers[:10]:
+-    html += f'<th>{h}</th>'
+-html += '</tr>'
+-for row in rows[1:]:
+-    if row[0]:
+-        status = str(row[15]) if len(row) > 15 else ''
+-        cls = 'success' if 'SUCCESS' in status else 'failed'
+-        html += '<tr>'
+-        for val in row[:10]:
+-            html += f'<td class=\"{cls}\">{val}</td>'
+-        html += '</tr>'
+-html += '</table></body></html>'
+-with open('output/listing_report.html', 'w', encoding='utf-8') as f:
+-    f.write(html)
+-print('Generated listing_report.html')
+-"
+-
+-      # ─── Step 6: 上传到 Google Drive ─────────────────
+-      - name: Upload to Google Drive
+-        env:
+-          MATON_API_KEY: ${{ secrets.MATON_API_KEY }}
+-        run: |
+-          pip install requests
+-          cd /tmp
+-          python3 -c "
+-import os, sys, json, urllib.request, urllib.parse
+-
+-key = os.environ.get('MATON_API_KEY', '')
+-folder_id = '15h280yccE1bN4gzTuAM-QlxI1sCRqdGu'  # listing folder
+-gateway = 'https://gateway.maton.ai/google-drive'
+-
+-def upload_file(path, name):
+-    if not os.path.exists(path):
+-        print(f'SKIP (not found): {path}')
+-        return
+-    size = os.path.getsize(path)
+-    ext = os.path.splitext(path)[1].lower()
+-    mime = {'.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+-            '.html': 'text/html', '.json': 'application/json'}.get(ext, 'application/octet-stream')
+-
+-    with open(path, 'rb') as f:
+-        data = f.read()
+-
+-    metadata = json.dumps({'name': name, 'parents': [folder_id]}).encode()
+-    boundary = '----FormBoundary7MA4YWxk'
+-    body = (f'--{boundary}\r\nContent-Type: application/json\r\n\r\n').encode()
+-    body += metadata + f'\r\n--{boundary}\r\n'.encode()
+-    body += f'Content-Type: {mime}\r\n\r\n'.encode() + data + f'\r\n--{boundary}--\r\n'.encode()
+-
+-    req = urllib.request.Request(
+-        f'{gateway}/upload/drive/v3/files?uploadType=multipart',
+-        data=body, method='POST'
+-    )
+-    req.add_header('Authorization', f'Bearer {key}')
+-    req.add_header('Content-Type', f'multipart/related; boundary={boundary}')
+-    try:
+-        resp = urllib.request.urlopen(req)
+-        result = json.load(resp)
+-        print(f'UPLOADED: {name} -> {result.get(\"id\")}')
+-    except Exception as e:
+-        print(f'FAILED: {name} -> {e}')
+-
+-# Upload Excel results
+-upload_file('/home/runner/work/ebay-project/ebay-project/src/listing-system/商品数据.xlsx',
+-            f'商品数据_结果.xlsx')
+-
+-# Upload listing HTML
+-import glob
+-for f in glob.glob('/home/runner/work/ebay-project/ebay-project/src/listing-system/output/*.html'):
+-    upload_file(f, os.path.basename(f))
+-"
+-
+-      # ─── 推送更新后的 Excel 回 GitHub ─────────────────
+-      - name: Commit updated Excel
+-        run: |
+-          cd /home/runner/work/ebay-project/ebay-project
+-          git config user.email "iron@openclaw.ai"
+-          git config user.name "Iron Bot"
+-          git add src/listing-system/商品数据.xlsx
+-          git diff --cached --quiet || (git commit -m "chore: update listing results $(date +%Y-%m-%d)" && git push)
+diff --git a/.github/workflows/listing_publish.yml b/.github/workflows/listing_publish.yml
+deleted file mode 100644
+index b98b6f5..0000000
+--- a/.github/workflows/listing_publish.yml
++++ /dev/null
+@@ -1,44 +0,0 @@
+-name: eBay Listing Publish
+-
+-on:
+-  push:
+-    branches:
+-      - main
+-
+-jobs:
+-  publish-listing:
+-    runs-on: ubuntu-latest
+-    steps:
+-      - uses: actions/checkout@v4
+-
+-      - uses: actions/setup-python@v5
+-        with:
+-          python-version: "3.11"
+-
+-      - name: Create config.json (with fresh token)
+-        working-directory: src/listing-system
+-        run: python3 scripts/make_config.py
+-        env:
+-          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
+-          EBAY_APP_SECRET: ${{ secrets.EBAY_APP_SECRET }}
+-          EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
+-
+-      - name: Install dependencies
+-        run: pip install requests openpyxl flask pandas pyyaml click rich Pillow
+-        working-directory: src/listing-system
+-
+-      - name: Run main.py
+-        working-directory: src/listing-system
+-        run: python main.py
+-
+-      - name: Upload to Google Drive
+-        env:
+-          MATON_API_KEY: ${{ secrets.MATON_API_KEY }}
+-        run: pip install requests 2>/dev/null && python3 src/listing-system/scripts/upload_drive.py
+-
+-      - name: Commit results
+-        run: |
+-          git config user.email "iron@openclaw.ai"
+-          git config user.name "Iron Bot"
+-          git add src/listing-system/商品数据.xlsx
+-          git diff --cached --quiet || (git commit -m "chore: update listing results" && git push)
+diff --git a/.github/workflows/listing_run.yml b/.github/workflows/listing_run.yml
+deleted file mode 100644
+index 4fa95c2..0000000
+--- a/.github/workflows/listing_run.yml
++++ /dev/null
+@@ -1,27 +0,0 @@
+-name: eBay Listing Run
+-
+-on:
+-  workflow_dispatch:
+-
+-jobs:
+-  build:
+-    runs-on: ubuntu-latest
+-    steps:
+-      - uses: actions/checkout@v4
+-      - uses: actions/setup-python@v5
+-        with:
+-          python-version: "3.11"
+-      - name: Install deps
+-        run: pip install requests openpyxl flask pandas pyyaml click rich Pillow
+-        working-directory: src/listing-system
+-      - name: Run listing
+-        run: |
+-          echo "=== Running main.py ==="
+-          python main.py 2>&1 || echo "Exit code: $?"
+-        working-directory: src/listing-system
+-        env:
+-          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
+-          EBAY_APP_SECRET: ${{ secrets.EBAY_APP_SECRET }}
+-          EBAY_USER_TOKEN: ${{ secrets.EBAY_USER_TOKEN }}
+-          EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
+-          EBAY_ENVIRONMENT: production
+diff --git a/.github/workflows/listing_v2.yml b/.github/workflows/listing_v2.yml
+deleted file mode 100644
+index a5d25ab..0000000
+--- a/.github/workflows/listing_v2.yml
++++ /dev/null
+@@ -1,36 +0,0 @@
+-name: eBay Listing Publish v2
+-
+-on:
+-  workflow_dispatch:
+-
+-jobs:
+-  publish-listing:
+-    runs-on: ubuntu-latest
+-    steps:
+-      - uses: actions/checkout@v4
+-
+-      - name: Set up Python
+-        uses: actions/setup-python@v5
+-        with:
+-          python-version: "3.11"
+-
+-      - name: Install dependencies
+-        run: pip install requests openpyxl flask pandas pyyaml click rich Pillow
+-
+-      - name: Run listing
+-        working-directory: src/listing-system
+-        env:
+-          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
+-          EBAY_APP_SECRET: ${{ secrets.EBAY_APP_SECRET }}
+-          EBAY_USER_TOKEN: ${{ secrets.EBAY_USER_TOKEN }}
+-          EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
+-          EBAY_ENVIRONMENT: production
+-        run: python main.py
+-
+-      - name: Upload logs
+-        if: always()
+-        working-directory: src/listing-system
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: listing-logs
+-          path: logs/
+diff --git a/ebay-ms/alembic/env.py b/ebay-ms/alembic/env.py
+index 6c94d55..0c30b70 100644
+--- a/ebay-ms/alembic/env.py
++++ b/ebay-ms/alembic/env.py
+@@ -2,22 +2,20 @@
+ alembic/env.py
+ Alembic 迁移配置，连接到 ebay-ms 数据库
+ """
++import sys
+ from logging.config import fileConfig
++from pathlib import Path
+ 
+ from alembic import context
+ from sqlalchemy import engine_from_config, pool
+ from sqlalchemy.engine import Connection
+ 
+-import sys
+-from pathlib import Path
+-
+ # 将项目根加入 path
+ sys.path.insert(0, str(Path(__file__).parent.parent))
+ 
++from core.config.settings import settings
+ from core.models.base import Base
+ from core.models.product import Product  # noqa: F401
+-from core.database.connection import get_engine
+-from core.config.settings import settings
+ 
+ # Alembic Config object
+ config = context.config
+diff --git a/ebay-ms/alembic/versions/dde7060d7740_create_products_table.py b/ebay-ms/alembic/versions/dde7060d7740_create_products_table.py
+index 35bc3f3..e795f15 100644
+--- a/ebay-ms/alembic/versions/dde7060d7740_create_products_table.py
++++ b/ebay-ms/alembic/versions/dde7060d7740_create_products_table.py
+@@ -7,9 +7,8 @@ Create Date: 2026-04-13 14:16:53.888669
+ """
+ from typing import Sequence, Union
+ 
+-from alembic import op
+ import sqlalchemy as sa
+-
++from alembic import op
+ 
+ # revision identifiers, used by Alembic.
+ revision: str = 'dde7060d7740'
+diff --git a/ebay-ms/core/config/settings.py b/ebay-ms/core/config/settings.py
+index 4fcb656..aba53a6 100644
+--- a/ebay-ms/core/config/settings.py
++++ b/ebay-ms/core/config/settings.py
+@@ -3,9 +3,10 @@ eBay MS - 统一配置管理
+ 所有配置从 .env 读取，支持多环境切换（dev/prod）
+ """
+ from pathlib import Path
+-from pydantic_settings import BaseSettings, SettingsConfigDict
+ from typing import Literal
+ 
++from pydantic_settings import BaseSettings, SettingsConfigDict
++
+ 
+ class Settings(BaseSettings):
+     """统一配置类，从 .env 自动加载"""
+diff --git a/ebay-ms/core/database/connection.py b/ebay-ms/core/database/connection.py
+index a6c40e8..12f4271 100644
+--- a/ebay-ms/core/database/connection.py
++++ b/ebay-ms/core/database/connection.py
+@@ -3,12 +3,11 @@ core/database/connection.py
+ SQLite + WAL 模式数据库连接管理
+ """
+ from contextlib import contextmanager
+-from pathlib import Path
+-from sqlalchemy import create_engine, event
+-from sqlalchemy.orm import sessionmaker, Session
+-from sqlalchemy.pool import StaticPool
+ 
+ from core.config.settings import settings
++from sqlalchemy import create_engine, event
++from sqlalchemy.orm import Session, sessionmaker
++from sqlalchemy.pool import StaticPool
+ 
+ 
+ def _setup_wal_mode(dbapi_conn, connection_record) -> None:
+diff --git a/ebay-ms/core/ebay_api/__init__.py b/ebay-ms/core/ebay_api/__init__.py
+index e69de29..38cf30c 100644
+--- a/ebay-ms/core/ebay_api/__init__.py
++++ b/ebay-ms/core/ebay_api/__init__.py
+@@ -0,0 +1,31 @@
++"""
++core/ebay_api — eBay API 封装层
++
++公开接口：
++    ebay_auth   — OAuth 认证管理器（刷新 token、加密存储）
++    ebay_client — 统一 HTTP 客户端（自动鉴权、重试、限流）
++    异常类     — EbayApiError, EbayAuthError, EbayRateLimitError, ...
++"""
++from core.ebay_api.auth import EbayAuth, ebay_auth
++from core.ebay_api.client import EbayClient, ebay_client
++from core.ebay_api.exceptions import (
++    EbayApiError,
++    EbayAuthError,
++    EbayNotFoundError,
++    EbayRateLimitError,
++    EbayServerError,
++    EbayTokenMissingError,
++)
++
++__all__ = [
++    "EbayAuth",
++    "ebay_auth",
++    "EbayClient",
++    "ebay_client",
++    "EbayApiError",
++    "EbayAuthError",
++    "EbayNotFoundError",
++    "EbayRateLimitError",
++    "EbayServerError",
++    "EbayTokenMissingError",
++]
+diff --git a/ebay-ms/core/ebay_api/auth.py b/ebay-ms/core/ebay_api/auth.py
+new file mode 100644
+index 0000000..79ceeb6
+--- /dev/null
++++ b/ebay-ms/core/ebay_api/auth.py
+@@ -0,0 +1,144 @@
++"""
++core/ebay_api/auth.py
++eBay OAuth 2.0 认证管理
++- 用 refresh_token 刷新 access_token
++- 与 token_store 集成，加密持久化
++- 带过期跟踪，自动续期
++"""
++import base64
++import time
++
++import httpx
++from core.config.settings import settings
++from core.ebay_api.exceptions import EbayAuthError, EbayTokenMissingError
++from core.security.token_store import token_store
++from loguru import logger
++
++# token_store 中的 key 名
++_KEY_REFRESH = "ebay_refresh_token"
++_KEY_ACCESS = "ebay_access_token"
++_KEY_EXPIRES = "ebay_token_expires_at"
++
++# 提前 5 分钟视为过期，避免边界竞态
++_EXPIRY_BUFFER_SECONDS = 300
++
++
++class EbayAuth:
++    """
++    eBay OAuth 2.0 管理器。
++
++    用法：
++        auth = EbayAuth()
++        auth.store_refresh_token("v^1.1#i^1#r^1#...")
++        token = auth.get_access_token()   # 自动刷新
++    """
++
++    def __init__(self):
++        self._access_token: str | None = None
++        self._expires_at: float = 0.0
++        self._load_cached_token()
++
++    # ── 公开方法 ──────────────────────────────────────────
++
++    def store_refresh_token(self, refresh_token: str) -> None:
++        """安全存储 refresh_token（加密写入 keyring）"""
++        token_store.save_token(_KEY_REFRESH, refresh_token)
++        logger.info("Refresh token 已安全存储")
++
++    def get_refresh_token(self) -> str:
++        """读取已存储的 refresh_token"""
++        rt = token_store.get_token(_KEY_REFRESH)
++        if not rt:
++            raise EbayTokenMissingError(
++                "Refresh token 未找到。请先调用 store_refresh_token() 或检查 keyring 配置。"
++            )
++        return rt
++
++    def get_access_token(self, force_refresh: bool = False) -> str:
++        """
++        获取有效的 access_token。
++        如果 token 已过期或 force_refresh=True，自动用 refresh_token 刷新。
++        """
++        if not force_refresh and self._access_token and time.time() < self._expires_at:
++            return self._access_token
++
++        logger.info("Access token 过期或缺失，开始刷新…")
++        self._refresh()
++        return self._access_token
++
++    def clear_tokens(self) -> None:
++        """清除所有已存储的 token"""
++        for key in (_KEY_REFRESH, _KEY_ACCESS, _KEY_EXPIRES):
++            token_store.delete_token(key)
++        self._access_token = None
++        self._expires_at = 0.0
++        logger.info("所有 eBay token 已清除")
++
++    # ── 内部方法 ──────────────────────────────────────────
++
++    def _load_cached_token(self) -> None:
++        """启动时从 keyring 加载已缓存的 access_token（如未过期）"""
++        cached = token_store.get_token(_KEY_ACCESS)
++        expires_str = token_store.get_token(_KEY_EXPIRES)
++        if cached and expires_str:
++            try:
++                self._expires_at = float(expires_str)
++                if time.time() < self._expires_at:
++                    self._access_token = cached
++                    logger.debug("已加载缓存的 access_token（有效期至 {}）", self._expires_at)
++            except (ValueError, TypeError):
++                pass
++
++    def _refresh(self) -> None:
++        """用 refresh_token 向 eBay 换取新的 access_token"""
++        refresh_token = self.get_refresh_token()
++
++        # Basic auth = base64(APP_ID:CERT_ID)
++        credentials = f"{settings.EBAY_APP_ID}:{settings.EBAY_CERT_ID}"
++        b64_creds = base64.b64encode(credentials.encode()).decode()
++
++        headers = {
++            "Content-Type": "application/x-www-form-urlencoded",
++            "Authorization": f"Basic {b64_creds}",
++        }
++        body = {
++            "grant_type": "refresh_token",
++            "refresh_token": refresh_token,
++            "scope": "https://api.ebay.com/oauth/api_scope "
++                     "https://api.ebay.com/oauth/api_scope/sell.inventory "
++                     "https://api.ebay.com/oauth/api_scope/sell.marketing "
++                     "https://api.ebay.com/oauth/api_scope/sell.account "
++                     "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
++        }
++
++        try:
++            resp = httpx.post(
++                settings.ebay_oauth_url,
++                headers=headers,
++                data=body,
++                timeout=30.0,
++            )
++        except httpx.HTTPError as exc:
++            raise EbayAuthError(f"OAuth 请求网络错误: {exc}") from exc
++
++        if resp.status_code != 200:
++            raise EbayAuthError(
++                f"OAuth 刷新失败 [{resp.status_code}]",
++                status_code=resp.status_code,
++                response_body=resp.text,
++            )
++
++        data = resp.json()
++        self._access_token = data["access_token"]
++        expires_in = int(data.get("expires_in", 7200))
++        self._expires_at = time.time() + expires_in - _EXPIRY_BUFFER_SECONDS
++
++        # 持久化到 keyring
++        token_store.save_token(_KEY_ACCESS, self._access_token)
++        token_store.save_token(_KEY_EXPIRES, str(self._expires_at))
++
++        logger.info("Access token 刷新成功，有效期 {} 秒", expires_in)
++
++
++# 全局单例
++ebay_auth = EbayAuth()
+diff --git a/ebay-ms/core/ebay_api/client.py b/ebay-ms/core/ebay_api/client.py
+new file mode 100644
+index 0000000..0a66188
+--- /dev/null
++++ b/ebay-ms/core/ebay_api/client.py
+@@ -0,0 +1,194 @@
++"""
++core/ebay_api/client.py
++eBay 统一 HTTP 客户端
++- 自动附加 Bearer token
++- 401 自动刷新重试
++- 429 指数退避
++- 5xx 重试（最多 3 次）
++- 统一日志
++"""
++import time
++from typing import Any
++
++import httpx
++from core.config.settings import settings
++from core.ebay_api.auth import ebay_auth
++from core.ebay_api.exceptions import (
++    EbayApiError,
++    EbayAuthError,
++    EbayNotFoundError,
++    EbayRateLimitError,
++    EbayServerError,
++)
++from loguru import logger
++
++_DEFAULT_TIMEOUT = 30.0
++_MAX_RETRIES = 3
++_BACKOFF_BASE = 2  # 退避基数（秒）
++
++
++class EbayClient:
++    """
++    eBay REST API 统一客户端。
++
++    用法：
++        client = EbayClient()
++        data = client.get("/sell/inventory/v1/inventory_item", params={"limit": 10})
++    """
++
++    def __init__(self, timeout: float = _DEFAULT_TIMEOUT):
++        self._timeout = timeout
++
++    # ── 公开 HTTP 方法 ───────────────────────────────────
++
++    def get(self, path: str, **kwargs) -> dict[str, Any]:
++        return self._request("GET", path, **kwargs)
++
++    def post(self, path: str, **kwargs) -> dict[str, Any]:
++        return self._request("POST", path, **kwargs)
++
++    def put(self, path: str, **kwargs) -> dict[str, Any]:
++        return self._request("PUT", path, **kwargs)
++
++    def delete(self, path: str, **kwargs) -> dict[str, Any]:
++        return self._request("DELETE", path, **kwargs)
++
++    # ── 核心请求逻辑 ─────────────────────────────────────
++
++    def _request(
++        self,
++        method: str,
++        path: str,
++        *,
++        params: dict | None = None,
++        json_body: dict | None = None,
++        headers: dict | None = None,
++        retry_count: int = 0,
++    ) -> dict[str, Any]:
++        """
++        发送请求，处理认证、重试、异常。
++
++        Args:
++            path: API 路径（如 /sell/inventory/v1/inventory_item）
++            params: URL 查询参数
++            json_body: JSON 请求体
++            headers: 额外 headers（会合并到默认 headers）
++            retry_count: 当前重试次数（内部用）
++        """
++        url = f"{settings.ebay_api_url}{path}"
++        req_headers = self._build_headers(headers)
++
++        logger.debug("{} {} (retry={})", method, path, retry_count)
++
++        try:
++            resp = httpx.request(
++                method,
++                url,
++                params=params,
++                json=json_body,
++                headers=req_headers,
++                timeout=self._timeout,
++            )
++        except httpx.HTTPError as exc:
++            if retry_count < _MAX_RETRIES:
++                wait = _BACKOFF_BASE ** retry_count
++                logger.warning("网络错误，{}秒后重试 ({}/{}): {}", wait, retry_count + 1, _MAX_RETRIES, exc)
++                time.sleep(wait)
++                return self._request(method, path, params=params, json_body=json_body,
++                                     headers=headers, retry_count=retry_count + 1)
++            raise EbayApiError(f"网络请求失败: {exc}") from exc
++
++        return self._handle_response(resp, method, path, params, json_body, headers, retry_count)
++
++    def _handle_response(
++        self,
++        resp: httpx.Response,
++        method: str,
++        path: str,
++        params: dict | None,
++        json_body: dict | None,
++        headers: dict | None,
++        retry_count: int,
++    ) -> dict[str, Any]:
++        """根据状态码分发处理"""
++        status = resp.status_code
++
++        # ── 成功 ─────────────────────────────────────────
++        if 200 <= status < 300:
++            # 204 No Content 等无 body 的响应
++            if status == 204 or not resp.text.strip():
++                return {}
++            return resp.json()
++
++        # ── 401 → 刷新 token 重试一次 ────────────────────
++        if status == 401:
++            if retry_count == 0:
++                logger.warning("收到 401，尝试刷新 access_token 后重试")
++                ebay_auth.get_access_token(force_refresh=True)
++                return self._request(method, path, params=params, json_body=json_body,
++                                     headers=headers, retry_count=retry_count + 1)
++            raise EbayAuthError(
++                f"认证失败 (已重试): {path}",
++                status_code=status,
++                response_body=resp.text,
++            )
++
++        # ── 404 ──────────────────────────────────────────
++        if status == 404:
++            raise EbayNotFoundError(
++                f"资源不存在: {path}",
++                status_code=status,
++                response_body=resp.text,
++            )
++
++        # ── 429 → 退避重试 ──────────────────────────────
++        if status == 429:
++            retry_after = int(resp.headers.get("Retry-After", _BACKOFF_BASE ** retry_count))
++            if retry_count < _MAX_RETRIES:
++                logger.warning("触发限流，等待 {}秒后重试 ({}/{})", retry_after, retry_count + 1, _MAX_RETRIES)
++                time.sleep(retry_after)
++                return self._request(method, path, params=params, json_body=json_body,
++                                     headers=headers, retry_count=retry_count + 1)
++            raise EbayRateLimitError(
++                f"限流未恢复: {path}",
++                retry_after=retry_after,
++                status_code=status,
++                response_body=resp.text,
++            )
++
++        # ── 5xx → 重试 ──────────────────────────────────
++        if status >= 500:
++            if retry_count < _MAX_RETRIES:
++                wait = _BACKOFF_BASE ** retry_count
++                logger.warning("服务器错误 [{}]，{}秒后重试 ({}/{})", status, wait, retry_count + 1, _MAX_RETRIES)
++                time.sleep(wait)
++                return self._request(method, path, params=params, json_body=json_body,
++                                     headers=headers, retry_count=retry_count + 1)
++            raise EbayServerError(
++                f"服务器持续错误: {path}",
++                status_code=status,
++                response_body=resp.text,
++            )
++
++        # ── 其他 4xx ─────────────────────────────────────
++        raise EbayApiError(
++            f"请求失败 [{status}]: {path}",
++            status_code=status,
++            response_body=resp.text,
++        )
++
++    def _build_headers(self, extra: dict | None = None) -> dict[str, str]:
++        """构建请求头：Bearer token + Content-Type + 额外 headers"""
++        token = ebay_auth.get_access_token()
++        h = {
++            "Authorization": f"Bearer {token}",
++            "Content-Type": "application/json",
++            "Accept": "application/json",
++        }
++        if extra:
++            h.update(extra)
++        return h
++
++
++# 全局单例
++ebay_client = EbayClient()
+diff --git a/ebay-ms/core/ebay_api/exceptions.py b/ebay-ms/core/ebay_api/exceptions.py
+new file mode 100644
+index 0000000..e971312
+--- /dev/null
++++ b/ebay-ms/core/ebay_api/exceptions.py
+@@ -0,0 +1,41 @@
++"""
++core/ebay_api/exceptions.py
++eBay API 自定义异常体系
++"""
++
++
++class EbayApiError(Exception):
++    """eBay API 基础异常"""
++
++    def __init__(self, message: str, status_code: int | None = None, response_body: str = ""):
++        self.status_code = status_code
++        self.response_body = response_body
++        super().__init__(message)
++
++
++class EbayAuthError(EbayApiError):
++    """认证/授权失败（401/403、token 过期、refresh 失败）"""
++    pass
++
++
++class EbayRateLimitError(EbayApiError):
++    """触发速率限制（429）"""
++
++    def __init__(self, message: str, retry_after: int | None = None, **kwargs):
++        self.retry_after = retry_after
++        super().__init__(message, **kwargs)
++
++
++class EbayNotFoundError(EbayApiError):
++    """资源不存在（404）"""
++    pass
++
++
++class EbayServerError(EbayApiError):
++    """eBay 服务端错误（5xx）"""
++    pass
++
++
++class EbayTokenMissingError(EbayAuthError):
++    """本地缺少必要 token（refresh_token 未存储等）"""
++    pass
+diff --git a/ebay-ms/core/models/base.py b/ebay-ms/core/models/base.py
+index abe6c47..725eaeb 100644
+--- a/ebay-ms/core/models/base.py
++++ b/ebay-ms/core/models/base.py
+@@ -3,6 +3,7 @@ core/models/base.py
+ 所有 ORM 模型的基类 + TimestampMixin
+ """
+ from datetime import datetime
++
+ from sqlalchemy import DateTime, func
+ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+ 
+diff --git a/ebay-ms/core/models/product.py b/ebay-ms/core/models/product.py
+index c8a05a3..325de28 100644
+--- a/ebay-ms/core/models/product.py
++++ b/ebay-ms/core/models/product.py
+@@ -4,11 +4,11 @@ Product 模型 — 商品主数据
+ SKU 是商品唯一标识
+ """
+ import enum
+-from sqlalchemy import String, Numeric, Enum, Index
+-from sqlalchemy.orm import Mapped, mapped_column
+ from decimal import Decimal
+ 
+ from core.models.base import Base, TimestampMixin
++from sqlalchemy import Enum, Index, Numeric, String
++from sqlalchemy.orm import Mapped, mapped_column
+ 
+ 
+ class ProductStatus(str, enum.Enum):
+diff --git a/ebay-ms/core/security/token_store.py b/ebay-ms/core/security/token_store.py
+index d5fd146..70e32d5 100644
+--- a/ebay-ms/core/security/token_store.py
++++ b/ebay-ms/core/security/token_store.py
+@@ -3,10 +3,8 @@ Token 安全存储 — 使用 Fernet 对称加密
+ Linux 环境下（无 macOS Keychain / SecretService），将 token 加密存储到文件。
+ 加密密钥来自 settings.TOKEN_ENCRYPTION_KEY（.env 中配置）。
+ """
+-import json
+ import keyring
+ import keyrings.alt.file
+-from pathlib import Path
+ from core.config.settings import settings
+ 
+ 
+diff --git a/ebay-ms/tests/test_ebay_api.py b/ebay-ms/tests/test_ebay_api.py
+new file mode 100644
+index 0000000..ae2d1e2
+--- /dev/null
++++ b/ebay-ms/tests/test_ebay_api.py
+@@ -0,0 +1,248 @@
++"""
++tests/test_ebay_api.py
++Day 3 — eBay API 封装层单元测试
++
++测试覆盖：
++  1. 异常层级关系
++  2. OAuth 刷新成功 → access_token 返回
++  3. OAuth 刷新失败 → 抛 EbayAuthError
++  4. refresh_token 缺失 → 抛 EbayTokenMissingError
++  5. client GET 200 → 返回 JSON
++  6. client 401 → 自动刷新重试
++  7. client 429 → 退避重试
++  8. client 404 → EbayNotFoundError
++  9. client 500 → EbayServerError（重试耗尽后）
++"""
++import time
++from unittest.mock import MagicMock, patch
++
++import pytest
++from core.ebay_api.exceptions import (
++    EbayApiError,
++    EbayAuthError,
++    EbayNotFoundError,
++    EbayRateLimitError,
++    EbayServerError,
++    EbayTokenMissingError,
++)
++
++# ── 异常测试 ──────────────────────────────────────────────
++
++
++class TestExceptions:
++    """异常继承关系 + 属性"""
++
++    def test_hierarchy(self):
++        assert issubclass(EbayAuthError, EbayApiError)
++        assert issubclass(EbayRateLimitError, EbayApiError)
++        assert issubclass(EbayNotFoundError, EbayApiError)
++        assert issubclass(EbayServerError, EbayApiError)
++        assert issubclass(EbayTokenMissingError, EbayAuthError)
++
++    def test_api_error_attributes(self):
++        err = EbayApiError("bad", status_code=400, response_body='{"error":"x"}')
++        assert err.status_code == 400
++        assert "x" in err.response_body
++
++    def test_rate_limit_retry_after(self):
++        err = EbayRateLimitError("slow", retry_after=60, status_code=429)
++        assert err.retry_after == 60
++
++
++# ── Auth 测试 ─────────────────────────────────────────────
++
++
++class TestEbayAuth:
++    """OAuth 刷新逻辑（mock HTTP + token_store）"""
++
++    def _make_auth(self):
++        """创建干净的 EbayAuth 实例（不触发 keyring 加载）"""
++        with patch("core.ebay_api.auth.token_store") as mock_store:
++            mock_store.get_token.return_value = None
++            from core.ebay_api.auth import EbayAuth
++            auth = EbayAuth()
++        return auth
++
++    def test_refresh_success(self):
++        auth = self._make_auth()
++
++        mock_resp = MagicMock()
++        mock_resp.status_code = 200
++        mock_resp.json.return_value = {
++            "access_token": "v^1.1#new_token",
++            "expires_in": 7200,
++            "token_type": "User Access Token",
++        }
++
++        with (
++            patch("core.ebay_api.auth.token_store") as mock_store,
++            patch("core.ebay_api.auth.httpx.post", return_value=mock_resp),
++        ):
++            mock_store.get_token.side_effect = lambda key: {
++                "ebay_refresh_token": "v^1.1#refresh_xxx",
++                "ebay_access_token": None,
++                "ebay_token_expires_at": None,
++            }.get(key)
++
++            token = auth.get_access_token(force_refresh=True)
++
++        assert token == "v^1.1#new_token"
++        # 验证 token 被持久化
++        assert mock_store.save_token.call_count == 2  # access + expires
++
++    def test_refresh_failure_raises(self):
++        auth = self._make_auth()
++
++        mock_resp = MagicMock()
++        mock_resp.status_code = 401
++        mock_resp.text = '{"error":"invalid_grant"}'
++
++        with (
++            patch("core.ebay_api.auth.token_store") as mock_store,
++            patch("core.ebay_api.auth.httpx.post", return_value=mock_resp),
++        ):
++            mock_store.get_token.side_effect = lambda key: (
++                "v^1.1#old_refresh" if key == "ebay_refresh_token" else None
++            )
++            with pytest.raises(EbayAuthError, match="OAuth 刷新失败"):
++                auth.get_access_token(force_refresh=True)
++
++    def test_missing_refresh_token_raises(self):
++        auth = self._make_auth()
++
++        with patch("core.ebay_api.auth.token_store") as mock_store:
++            mock_store.get_token.return_value = None
++            with pytest.raises(EbayTokenMissingError, match="Refresh token 未找到"):
++                auth.get_access_token()
++
++    def test_cached_token_reused(self):
++        """未过期的 access_token 直接返回，不发 HTTP"""
++        auth = self._make_auth()
++        auth._access_token = "cached_token"
++        auth._expires_at = time.time() + 3600  # 1 小时后才过期
++
++        # 不 mock httpx —— 如果代码发了请求会报错
++        token = auth.get_access_token()
++        assert token == "cached_token"
++
++
++# ── Client 测试 ───────────────────────────────────────────
++
++
++class TestEbayClient:
++    """HTTP 客户端逻辑（mock auth + httpx）"""
++
++    def _make_client(self):
++        from core.ebay_api.client import EbayClient
++        return EbayClient(timeout=5.0)
++
++    @patch("core.ebay_api.client.ebay_auth")
++    @patch("core.ebay_api.client.httpx.request")
++    def test_get_200(self, mock_request, mock_auth):
++        mock_auth.get_access_token.return_value = "test_token"
++        mock_resp = MagicMock()
++        mock_resp.status_code = 200
++        mock_resp.text = '{"items":[]}'
++        mock_resp.json.return_value = {"items": []}
++        mock_request.return_value = mock_resp
++
++        client = self._make_client()
++        result = client.get("/sell/inventory/v1/inventory_item", params={"limit": 10})
++
++        assert result == {"items": []}
++        # 验证 Bearer header
++        call_kwargs = mock_request.call_args
++        assert "Bearer test_token" in call_kwargs.kwargs["headers"]["Authorization"]
++
++    @patch("core.ebay_api.client.ebay_auth")
++    @patch("core.ebay_api.client.httpx.request")
++    def test_401_triggers_refresh(self, mock_request, mock_auth):
++        mock_auth.get_access_token.return_value = "refreshed_token"
++
++        resp_401 = MagicMock()
++        resp_401.status_code = 401
++        resp_401.text = "Unauthorized"
++
++        resp_200 = MagicMock()
++        resp_200.status_code = 200
++        resp_200.text = '{"ok":true}'
++        resp_200.json.return_value = {"ok": True}
++
++        mock_request.side_effect = [resp_401, resp_200]
++
++        client = self._make_client()
++        result = client.get("/test")
++
++        assert result == {"ok": True}
++        mock_auth.get_access_token.assert_any_call(force_refresh=True)
++
++    @patch("core.ebay_api.client.time.sleep")  # 避免真等
++    @patch("core.ebay_api.client.ebay_auth")
++    @patch("core.ebay_api.client.httpx.request")
++    def test_429_retries(self, mock_request, mock_auth, mock_sleep):
++        mock_auth.get_access_token.return_value = "token"
++
++        resp_429 = MagicMock()
++        resp_429.status_code = 429
++        resp_429.headers = {"Retry-After": "1"}
++        resp_429.text = "Rate limited"
++
++        resp_200 = MagicMock()
++        resp_200.status_code = 200
++        resp_200.text = '{"ok":true}'
++        resp_200.json.return_value = {"ok": True}
++
++        mock_request.side_effect = [resp_429, resp_200]
++
++        client = self._make_client()
++        result = client.get("/test")
++
++        assert result == {"ok": True}
++        mock_sleep.assert_called_once_with(1)
++
++    @patch("core.ebay_api.client.ebay_auth")
++    @patch("core.ebay_api.client.httpx.request")
++    def test_404_raises(self, mock_request, mock_auth):
++        mock_auth.get_access_token.return_value = "token"
++
++        resp = MagicMock()
++        resp.status_code = 404
++        resp.text = "Not Found"
++        mock_request.return_value = resp
++
++        client = self._make_client()
++        with pytest.raises(EbayNotFoundError):
++            client.get("/nonexistent")
++
++    @patch("core.ebay_api.client.time.sleep")
++    @patch("core.ebay_api.client.ebay_auth")
++    @patch("core.ebay_api.client.httpx.request")
++    def test_500_retries_then_raises(self, mock_request, mock_auth, mock_sleep):
++        mock_auth.get_access_token.return_value = "token"
++
++        resp_500 = MagicMock()
++        resp_500.status_code = 500
++        resp_500.text = "Internal Server Error"
++        # 4 次都是 500（初始 + 3 次重试）
++        mock_request.return_value = resp_500
++
++        client = self._make_client()
++        with pytest.raises(EbayServerError):
++            client.get("/broken")
++
++        # 验证重试了 3 次
++        assert mock_sleep.call_count == 3
++
++    @patch("core.ebay_api.client.ebay_auth")
++    @patch("core.ebay_api.client.httpx.request")
++    def test_204_returns_empty(self, mock_request, mock_auth):
++        mock_auth.get_access_token.return_value = "token"
++
++        resp = MagicMock()
++        resp.status_code = 204
++        resp.text = ""
++        mock_request.return_value = resp
++
++        client = self._make_client()
++        result = client.delete("/some-resource")
++        assert result == {}
+diff --git a/ebay-ms/tests/test_product_crud.py b/ebay-ms/tests/test_product_crud.py
+index be9ffa6..e341e08 100644
+--- a/ebay-ms/tests/test_product_crud.py
++++ b/ebay-ms/tests/test_product_crud.py
+@@ -2,13 +2,13 @@
+ tests/test_product_crud.py
+ Product 模型 CRUD 测试
+ """
+-import pytest
+ from decimal import Decimal
+ 
+-from sqlalchemy import select
+-from core.database.connection import get_session, get_engine
++import pytest
++from core.database.connection import get_engine, get_session
+ from core.models.base import Base
+ from core.models.product import Product, ProductStatus
++from sqlalchemy import select
+ 
+ 
+ @pytest.fixture(scope="function")
