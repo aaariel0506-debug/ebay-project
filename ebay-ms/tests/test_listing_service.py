@@ -1,24 +1,24 @@
 """tests/test_listing_service.py — Day 7 Listing Service 测试"""
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
 from modules.listing.schemas import (
+    InventoryItemResponse,
     ListingCreateRequest,
     ListingCreateResponse,
-    InventoryItemResponse,
     OfferResponse,
 )
+from modules.listing.service import ListingCreateError, ListingService
 from modules.listing.utils import (
-    normalize_condition,
-    build_inventory_availability,
-    build_offers_pricing_summary,
-    format_price,
-    extract_listing_id_from_href,
     EBAY_CONDITIONS,
     EBAY_MARKETPLACE_IDS,
+    build_inventory_availability,
+    build_offers_pricing_summary,
+    extract_listing_id_from_href,
+    format_price,
+    normalize_condition,
     validate_image_urls,
 )
-from modules.listing.service import ListingService, ListingCreateError
 
 
 class TestListingSchemas:

@@ -1,27 +1,22 @@
 """modules.listing.service — ListingService，eBay Listing 创建/更新业务逻辑"""
 from typing import Any
 
-from loguru import logger
-
+from core.database.connection import get_session
 from core.ebay_api.client import EbayClient
 from core.ebay_api.exceptions import EbayApiError
 from core.events.bus import get_event_bus
-from core.models import EbayListing, Product, ListingStatus
-from core.database.connection import get_session
+from core.models import EbayListing, ListingStatus, Product
 from core.utils.logger import get_logger
 from modules.listing.schemas import (
+    InventoryItemResponse,
     ListingCreateRequest,
     ListingCreateResponse,
-    InventoryItemResponse,
-    OfferResponse,
-    PublishResponse,
 )
 from modules.listing.utils import (
-    normalize_condition,
     build_inventory_availability,
     build_offers_pricing_summary,
     extract_listing_id_from_href,
-    format_price,
+    normalize_condition,
 )
 
 log = get_logger("listing_service")
@@ -65,8 +60,6 @@ class ListingService:
         log.info(f"开始创建 Listing: sku={req.sku}, price={req.listing_price}")
 
         errors: list[str] = []
-        inventory_done = False
-        offer_created = False
         offer_id: str | None = None
         listing_id: str | None = None
         ebay_item_id: str | None = None
@@ -74,7 +67,6 @@ class ListingService:
         # ── Step 1: createOrReplaceInventoryItem ─────────
         try:
             self._create_inventory_item(req)
-            inventory_done = True
             log.info(f"Step 1 完成: sku={req.sku}")
         except EbayApiError as exc:
             log.error(f"Step 1 失败 (createOrReplaceInventoryItem): {exc}")
@@ -88,7 +80,6 @@ class ListingService:
         # ── Step 2: createOffer ─────────────────────────
         try:
             offer_id = self._create_offer(req)
-            offer_created = True
             log.info(f"Step 2 完成: offer_id={offer_id}")
         except EbayApiError as exc:
             log.error(f"Step 2 失败 (createOffer): {exc}")
@@ -174,7 +165,7 @@ class ListingService:
         # Remove None values
         body = {k: v for k, v in body.items() if v is not None}
 
-        resp = self.client.put(
+        self.client.put(
             "/inventory_item/{sku}".format(sku=req.sku),
             json_body=body,
         )

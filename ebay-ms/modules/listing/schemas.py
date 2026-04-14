@@ -1,8 +1,8 @@
 """modules.listing.schemas — Pydantic schemas for Listing operations"""
 from datetime import datetime
 from typing import Annotated
-from pydantic import BaseModel, Field, field_validator
 
+from pydantic import BaseModel, Field
 
 # ── Request Schemas ───────────────────────────────────────
 

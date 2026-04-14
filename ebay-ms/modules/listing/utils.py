@@ -1,7 +1,6 @@
 """modules.listing.utils — Listing 操作辅助函数"""
 import re
 
-
 # ── eBay 常量 ─────────────────────────────────────────────
 
 EBAY_MARKETPLACE_IDS = {
