@@ -2,13 +2,13 @@
 tests/test_product_crud.py
 Product 模型 CRUD 测试
 """
-import pytest
 from decimal import Decimal
 
-from sqlalchemy import select
-from core.database.connection import get_session, get_engine
+import pytest
+from core.database.connection import get_engine, get_session
 from core.models.base import Base
 from core.models.product import Product, ProductStatus
+from sqlalchemy import select
 
 
 @pytest.fixture(scope="function")

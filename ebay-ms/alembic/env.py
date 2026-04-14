@@ -2,22 +2,20 @@
 alembic/env.py
 Alembic 迁移配置，连接到 ebay-ms 数据库
 """
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlalchemy.engine import Connection
 
-import sys
-from pathlib import Path
-
 # 将项目根加入 path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.config.settings import settings
 from core.models.base import Base
 from core.models.product import Product  # noqa: F401
-from core.database.connection import get_engine
-from core.config.settings import settings
 
 # Alembic Config object
 config = context.config

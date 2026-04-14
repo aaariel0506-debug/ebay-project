@@ -3,8 +3,9 @@ eBay MS - 统一配置管理
 所有配置从 .env 读取，支持多环境切换（dev/prod）
 """
 from pathlib import Path
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Literal
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):

@@ -3,6 +3,7 @@ core/models/base.py
 所有 ORM 模型的基类 + TimestampMixin
 """
 from datetime import datetime
+
 from sqlalchemy import DateTime, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 

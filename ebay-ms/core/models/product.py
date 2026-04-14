@@ -4,11 +4,11 @@ Product 模型 — 商品主数据
 SKU 是商品唯一标识
 """
 import enum
-from sqlalchemy import String, Numeric, Enum, Index
-from sqlalchemy.orm import Mapped, mapped_column
 from decimal import Decimal
 
 from core.models.base import Base, TimestampMixin
+from sqlalchemy import Enum, Index, Numeric, String
+from sqlalchemy.orm import Mapped, mapped_column
 
 
 class ProductStatus(str, enum.Enum):

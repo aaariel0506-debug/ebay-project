@@ -3,12 +3,11 @@ core/database/connection.py
 SQLite + WAL 模式数据库连接管理
 """
 from contextlib import contextmanager
-from pathlib import Path
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool
 
 from core.config.settings import settings
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 def _setup_wal_mode(dbapi_conn, connection_record) -> None:

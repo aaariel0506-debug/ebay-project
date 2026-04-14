@@ -3,10 +3,8 @@ Token 安全存储 — 使用 Fernet 对称加密
 Linux 环境下（无 macOS Keychain / SecretService），将 token 加密存储到文件。
 加密密钥来自 settings.TOKEN_ENCRYPTION_KEY（.env 中配置）。
 """
-import json
 import keyring
 import keyrings.alt.file
-from pathlib import Path
 from core.config.settings import settings
 
 
