@@ -65,6 +65,18 @@ class ListingTemplate(TimestampMixin, Base):
         String(100),
         nullable=True,
     )
+    currency: Mapped[str | None] = mapped_column(
+        String(3),
+        nullable=True,
+        default="USD",
+        comment="模板默认币种",
+    )
+    marketplace_id: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+        default="EBAY_US",
+        comment="模板默认市场，如 EBAY_US / EBAY_JP",
+    )
     default_price_markup: Mapped[float | None] = mapped_column(
         Numeric(6, 2),
         nullable=True,

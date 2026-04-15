@@ -294,7 +294,10 @@ class TestFromExisting:
     def test_from_existing_inventory_api(self, ts: TemplateService):
         mock_client = MagicMock()
         mock_client.get.return_value = {
-            "categoryId": "CAT123",
+            "product": {
+                "categoryId": "CAT123",
+                "description": "Item description template: {title}",
+            },
             "condition": "NEW",
             "conditionDescription": "Brand new item",
             "listingPolicies": {
@@ -302,11 +305,10 @@ class TestFromExisting:
                 "returnPolicyId": "ret-001",
                 "fulfillmentPolicyId": "ship-001",
             },
-            "description": "Item description template: {title}",
         }
 
         tpl = ts.from_existing(
-            ebay_item_id="item-abc",
+            sku="MY-SKU-001",
             template_name=f"from-existing-test-{uuid.uuid4().hex[:8]}",
             client=mock_client,
         )
@@ -322,25 +324,20 @@ class TestFromExisting:
 
     def test_from_existing_browse_api_fallback(self, ts: TemplateService):
         mock_client = MagicMock()
-        # Inventory API 失败，触发 Browse API fallback
         from core.ebay_api.exceptions import EbayApiError
 
-        mock_client.get.side_effect = EbayApiError("not found", status_code=404)
-        mock_client.get.return_value = {
-            "condition": "USED",
-            "shortDescription": "Used item",
-        }
-
-        # Browse API 返回不含 listingPolicies，用 get.return_value
-        # 需要第二次调用才返回 Browse 数据
+        # Inventory API 失败 → Browse API fallback
         mock_client.get.side_effect = [
-            EbayApiError("not found", status_code=404),
-            {"condition": "USED", "shortDescription": "Used item"},
+            EbayApiError("not found", status_code=404),  # Inventory API fails
+            {"condition": "USED", "shortDescription": "Used item", "categoryId": "CAT999"},  # Browse API succeeds
         ]
 
         tpl = ts.from_existing(
-            ebay_item_id="item-xyz",
+            sku="UNKNOWN-SKU",
+            item_id="item-xyz",
             template_name=f"browse-fallback-test-{uuid.uuid4().hex[:8]}",
             client=mock_client,
         )
+
+        assert tpl.condition == "USED"
         assert tpl.condition == "USED"

@@ -47,6 +47,8 @@ class TemplateService:
         image_settings: dict[str, Any] | None = None,
         is_default: bool = False,
         notes: str | None = None,
+        currency: str = "USD",
+        marketplace_id: str = "EBAY_US",
     ) -> ListingTemplate:
         """创建新模板。名称唯一。
 
@@ -55,6 +57,8 @@ class TemplateService:
             description_template: 商品描述模板，支持占位符
                 {title}, {brand}, {size}, {color}, {condition}, {price}。
             default_price_markup: 加价率，如 1.2 表示在成本价基础上 ×1.2。
+            currency: 模板默认币种（USD/JPY 等）。
+            marketplace_id: 模板默认市场（EBAY_US / EBAY_JP 等）。
 
         Returns:
             创建的 ListingTemplate 实例。
@@ -278,26 +282,34 @@ class TemplateService:
             fulfillment_policy_id=tpl.shipping_policy_id or "",
             return_policy_id=tpl.return_policy_id or "",
             payment_policy_id=tpl.payment_policy_id or "",
-            currency="JPY",
-            marketplace_id="EBAY_JP",
+            currency=tpl.currency or "USD",
+            marketplace_id=tpl.marketplace_id or "EBAY_US",
         )
 
     # ── 从现有 listing 生成模板 ─────────────────────────────────────────────
 
     def from_existing(
         self,
-        ebay_item_id: str,
-        template_name: str,
         *,
-        client: Any = None,
+        sku: str | None = None,
+        item_id: str | None = None,
+        template_name: str,
+        client: Any | None = None,
     ) -> ListingTemplate:
         """从 eBay 已有 listing 拉取配置，保存为模板。
 
-        底层调用 eBay Inventory API 的 getOffer 或 Browse API
-        拉取 listing 的配置信息（category、condition、policies 等）。
+        双路径策略：
+        1. 优先 Inventory API（需要 SKU）：GET /sell/inventory/v1/inventory_item/{sku}
+           → 返回库存详情，含关联的 offer（可拿到 policies）
+        2. Fallback Browse API（需要 Item ID）：GET /buy/browse/v1/item/{item_id}
+           → 返回 listing 公开信息（不含 policies，需手动补充）
+
+        注意：Offer ID ≠ Item ID。Item ID 是买家看到的编号，Offer ID 是内部编号。
+        要用 Inventory API 必须提供 SKU。
 
         Args:
-            ebay_item_id: eBay Item ID。
+            sku: 商品 SKU（用于 Inventory API 路径，可拿到完整 policies）。
+            item_id: eBay Item ID（用于 Browse API fallback，仅返回公开信息）。
             template_name: 保存为模板的名称。
             client: EbayClient 实例，不传则用默认。
 
@@ -308,35 +320,62 @@ class TemplateService:
             from core.ebay_api import EbayClient
             client = EbayClient()
 
-        try:
-            # 尝试从 Inventory API 拉取 offer 详情
-            resp = client.get(
-                f"/sell/inventory/v1/offer/{ebay_item_id}",
-            )
-        except EbayApiError:
-            # fallback：尝试 Browse API
+        resp: dict[str, Any] = {}
+        source: str = ""
+
+        # 路径 1：Inventory API（需要 SKU）
+        if sku:
             try:
                 resp = client.get(
-                    f"/buy/browse/v1/item/{ebay_item_id}",
+                    f"/sell/inventory/v1/inventory_item/{sku}",
                 )
+                source = "inventory_api"
+            except EbayApiError:
+                resp = {}
+            except Exception:
+                resp = {}
+
+        # 路径 2：Browse API（需要 Item ID）
+        if not resp and item_id:
+            try:
+                resp = client.get(
+                    f"/buy/browse/v1/item/{item_id}",
+                )
+                source = "browse_api"
             except EbayApiError as exc:
-                raise TemplateError(f"无法获取 listing {ebay_item_id}: {exc}") from exc
+                raise TemplateError(
+                    f"无法获取 listing（SKU={sku}, Item ID={item_id}）。"
+                    f"Inventory API 和 Browse API 均失败: {exc}"
+                ) from exc
 
-        # 提取可用字段
-        category_id = resp.get("categoryId") or ""
-        condition = resp.get("condition", "")
-        condition_desc = resp.get("conditionDescription", "")
+        if not resp:
+            raise TemplateError(
+                "无法获取 listing：未提供有效的 SKU 或 Item ID"
+            )
 
-        # policies（Inventory API 返回格式）
-        policies = resp.get("listingPolicies", {}) or {}
-        payment_policy_id = policies.get("paymentPolicyId", "")
-        return_policy_id = policies.get("returnPolicyId", "")
-        fulfillment_policy_id = policies.get("fulfillmentPolicyId", "")
-
-        # description（Browse API 返回格式）
-        description_template: str | None = None
-        if resp.get("description"):
-            description_template = str(resp["description"])
+        # 提取字段（两个 API 响应格式不同）
+        if source == "inventory_api":
+            # Inventory API: 字段在根级别
+            category_id = str(resp.get("product", {}).get("categoryId", "") or "")
+            condition = str(resp.get("condition", "") or "")
+            condition_desc = str(resp.get("conditionDescription", "") or "")
+            description_template: str | None = None
+            if resp.get("product", {}).get("description"):
+                description_template = str(resp["product"]["description"])
+            policies = resp.get("listingPolicies", {}) or {}
+            payment_policy_id = str(policies.get("paymentPolicyId", "") or "")
+            return_policy_id = str(policies.get("returnPolicyId", "") or "")
+            fulfillment_policy_id = str(policies.get("fulfillmentPolicyId", "") or "")
+        else:
+            # Browse API: categoryId 在 additionalImageUrls 等位置
+            category_id = str(resp.get("categoryId", "") or "")
+            condition = str(resp.get("condition", "") or "")
+            condition_desc = str(resp.get("conditionDescription", "") or resp.get("shortDescription", "") or "")
+            description_template = None  # Browse API 不返回完整 description
+            # Browse API 不返回 policies，需要用户手动填写
+            payment_policy_id = ""
+            return_policy_id = ""
+            fulfillment_policy_id = ""
 
         return self.create_template(
             name=template_name,
