@@ -4,6 +4,7 @@ from core.models.inventory import Inventory, InventoryType
 from core.models.listing import EbayListing, ListingStatus
 from core.models.order import Order, OrderStatus
 from core.models.product import Product, ProductStatus
+from core.models.template import ListingTemplate
 from core.models.transaction import Transaction, TransactionType
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "Transaction",
     "TransactionType",
     "ProductStatus",
+    "ListingTemplate",
 ]
