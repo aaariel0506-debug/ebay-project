@@ -52,6 +52,29 @@ def run_inventory_offline_cmd(argv: list[str]) -> int:
     p_stock_all = sub.add_parser("stock-all", help="查询所有 SKU 库存快照")
     p_stock_all.add_argument("--limit", type=int, default=200, help="最多返回 SKU 数")
 
+
+    # ── 出库 ───────────────────────────────────────────
+
+    p_out = sub.add_parser("outbound", help="出库记录")
+    p_out.add_argument("--sku", required=True, help="商品 SKU")
+    p_out.add_argument("--quantity", required=True, type=int, help="出库数量")
+    p_out.add_argument("--order", dest="related_order", help="关联订单号")
+    p_out.add_argument("--operator", help="操作人")
+    p_out.add_argument("--location", help="出库库位")
+    p_out.add_argument("--note", help="备注")
+
+    p_ret = sub.add_parser("return-in", help="退货入库")
+    p_ret.add_argument("--sku", required=True)
+    p_ret.add_argument("--quantity", required=True, type=int)
+    p_ret.add_argument("--order", dest="related_order", help="关联订单号")
+    p_ret.add_argument("--operator", help="操作人")
+    p_ret.add_argument("--note", help="备注")
+
+    p_out_list = sub.add_parser("outbound-list", help="查询出库记录")
+    p_out_list.add_argument("--sku", help="按 SKU 筛选")
+    p_out_list.add_argument("--order", dest="related_order", help="按订单号筛选")
+    p_out_list.add_argument("--limit", type=int, default=100)
+
     args = parser.parse_args(argv)
 
     # ── 路由 ───────────────────────────────────────
@@ -68,6 +91,12 @@ def run_inventory_offline_cmd(argv: list[str]) -> int:
         return _cmd_stock(args)
     if args.cmd == "stock-all":
         return _cmd_stock_all(args)
+    if args.cmd == "outbound":
+        return _cmd_outbound(args)
+    if args.cmd == "return-in":
+        return _cmd_return_in(args)
+    if args.cmd == "outbound-list":
+        return _cmd_outbound_list(args)
 
     parser.print_help()
     return 0
@@ -205,6 +234,69 @@ def _cmd_stock_all(args) -> int:
             f"{s['total_out']:>6}"
         )
     print(f"\n共 {len(stocks)} 个 SKU")
+    return 0
+
+
+
+def _cmd_outbound(args) -> int:
+    from modules.inventory_offline import InboundService
+
+    svc = InboundService()
+    result = svc.outbound(
+        sku=args.sku,
+        quantity=args.quantity,
+        related_order=args.related_order,
+        operator=args.operator,
+        location=args.location,
+        note=args.note,
+    )
+    print(
+        f"✅ 出库记录: {result['sku']} × {result['quantity']}"
+        f"，剩余库存: {result['remaining_stock']}"
+    )
+    return 0
+
+
+def _cmd_return_in(args) -> int:
+    from modules.inventory_offline import InboundService
+
+    svc = InboundService()
+    result = svc.return_inventory(
+        sku=args.sku,
+        quantity=args.quantity,
+        related_order=args.related_order,
+        operator=args.operator,
+        note=args.note,
+    )
+    print(f"✅ 退货入库: {result['sku']} × {result['quantity']}")
+    return 0
+
+
+def _cmd_outbound_list(args) -> int:
+    from modules.inventory_offline import InboundService
+
+    svc = InboundService()
+    rows = svc.list_outbound(
+        sku=args.sku,
+        related_order=args.related_order,
+        limit=args.limit,
+    )
+
+    if not rows:
+        print("（无出库记录）")
+        return 0
+
+    print(
+        f"{'时间':<26}  {'SKU':<20}  {'数量':>5}  {'订单':<15}  {'操作人'}"
+    )
+    print("-" * 85)
+    for r in rows:
+        ts = r["occurred_at"].strftime("%Y-%m-%d %H:%M:%S") if r["occurred_at"] else "—"
+        print(
+            f"{ts:<26}  {r['sku']:<20}  {r['quantity']:>5}  "
+            f"{r['related_order'] or '—':<15}  {r['operator'] or '—'}"
+        )
+    print(f"\n共 {len(rows)} 条")
     return 0
 
 

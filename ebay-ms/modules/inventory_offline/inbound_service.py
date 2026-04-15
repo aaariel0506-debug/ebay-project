@@ -497,6 +497,220 @@ class InboundService:
 
 
 
+
+    def outbound(
+        self,
+        sku: str,
+        quantity: int,
+        related_order: str | None = None,
+        operator: str | None = None,
+        location: str | None = None,
+        note: str | None = None,
+    ) -> dict:
+        """
+        出库：创建 Inventory(type=OUT) 变动记录。
+
+        校验库存是否充足（available_quantity >= quantity）。
+        成功后发布 STOCK_OUT 事件。
+
+        Args:
+            sku: 商品 SKU
+            quantity: 出库数量（正数）
+            related_order: 关联订单号
+            operator: 操作人
+            location: 出库库位
+            note: 备注
+
+        Returns:
+            dict，含 outbound record 信息
+
+        Raises:
+            ValueError: 库存不足或 SKU 不存在
+        """
+        if quantity <= 0:
+            raise ValueError(f"出库数量必须 > 0，实际: {quantity}")
+
+        with self._get_session() as sess:
+            # 检查库存是否充足
+            stock = self._compute_available(sess, sku)
+            if stock < quantity:
+                raise ValueError(
+                    f"库存不足：{sku} 当前可用 {stock} 件，申请出库 {quantity} 件"
+                )
+
+            # 记录出库
+            now = datetime.now(timezone.utc)
+            inv = self._Inventory(
+                sku=sku,
+                type=self._InventoryType.OUT,
+                quantity=quantity,
+                related_order=related_order,
+                location=location,
+                operator=operator,
+                note=note,
+                occurred_at=now,
+            )
+            sess.add(inv)
+            sess.commit()
+
+            # 发布 STOCK_OUT 事件
+            bus = self._EventBus()
+            bus.publish(
+                event_type="STOCK_OUT",
+                payload={
+                    "sku": sku,
+                    "quantity": quantity,
+                    "related_order": related_order,
+                    "operator": operator,
+                    "occurred_at": now.isoformat(),
+                },
+            )
+
+            log.info(f"出库 {sku} × {quantity}，关联订单: {related_order or '—'}")
+
+            return {
+                "sku": sku,
+                "quantity": quantity,
+                "related_order": related_order,
+                "remaining_stock": stock - quantity,
+            }
+
+    def return_inventory(
+        self,
+        sku: str,
+        quantity: int,
+        related_order: str | None = None,
+        operator: str | None = None,
+        note: str | None = None,
+    ) -> dict:
+        """
+        退货：创建 Inventory(type=RETURN) 变动记录（增加库存）。
+
+        Args:
+            sku: 商品 SKU
+            quantity: 退货数量（正数）
+            related_order: 关联订单号
+            operator: 操作人
+            note: 备注
+
+        Returns:
+            dict
+        """
+        if quantity <= 0:
+            raise ValueError(f"退货数量必须 > 0，实际: {quantity}")
+
+        with self._get_session() as sess:
+            now = datetime.now(timezone.utc)
+            inv = self._Inventory(
+                sku=sku,
+                type=self._InventoryType.RETURN,
+                quantity=quantity,
+                related_order=related_order,
+                operator=operator,
+                note=note,
+                occurred_at=now,
+            )
+            sess.add(inv)
+            sess.commit()
+
+            bus = self._EventBus()
+            bus.publish(
+                event_type="STOCK_RETURN",
+                payload={
+                    "sku": sku,
+                    "quantity": quantity,
+                    "related_order": related_order,
+                    "operator": operator,
+                },
+            )
+
+            log.info(f"退货入库 {sku} × {quantity}")
+
+            return {"sku": sku, "quantity": quantity, "related_order": related_order}
+
+    def list_outbound(
+        self,
+        sku: str | None = None,
+        related_order: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """
+        查询出库记录。
+
+        Args:
+            sku: 按 SKU 筛选
+            related_order: 按订单号筛选
+            start_date: 按开始日期筛选
+            end_date: 按结束日期筛选
+            limit: 返回条数上限
+        """
+        with self._get_session() as sess:
+            q = sess.query(self._Inventory).filter(
+                self._Inventory.type == self._InventoryType.OUT
+            )
+            if sku:
+                q = q.filter(self._Inventory.sku == sku)
+            if related_order:
+                q = q.filter(self._Inventory.related_order == related_order)
+            if start_date:
+                q = q.filter(self._Inventory.occurred_at >= start_date)
+            if end_date:
+                q = q.filter(self._Inventory.occurred_at <= end_date)
+
+            rows = q.order_by(self._Inventory.occurred_at.desc()).limit(limit).all()
+
+            return [
+                {
+                    "sku": r.sku,
+                    "quantity": r.quantity,
+                    "related_order": r.related_order,
+                    "location": r.location,
+                    "operator": r.operator,
+                    "note": r.note,
+                    "occurred_at": r.occurred_at,
+                }
+                for r in rows
+            ]
+
+    # ── 内部方法 ──────────────────────────────────────
+
+    def _compute_available(self, sess, sku: str) -> int:
+        """计算指定 SKU 的可用库存（in - out + adjust + return）。"""
+        from sqlalchemy import case, func
+
+        result = sess.query(
+            func.sum(
+                case(
+                    (
+                        self._Inventory.type.in_(
+                            [self._InventoryType.IN, self._InventoryType.RETURN]
+                        ),
+                        self._Inventory.quantity,
+                    ),
+                    else_=0,
+                )
+            ).label("in_total"),
+            func.sum(
+                case(
+                    (self._Inventory.type == self._InventoryType.OUT, self._Inventory.quantity),
+                    else_=0,
+                )
+            ).label("out_total"),
+            func.sum(
+                case(
+                    (self._Inventory.type == self._InventoryType.ADJUST, self._Inventory.quantity),
+                    else_=0,
+                )
+            ).label("adj_total"),
+        ).filter(self._Inventory.sku == sku).first()
+
+        inbound = int(result.in_total or 0)
+        outbound = int(result.out_total or 0)
+        adjust = int(result.adj_total or 0)
+        return inbound - outbound + adjust
+
     def _generate_receipt_no(self) -> str:
         """生成入库单号：IN-YYYY-MM-DD-NNN"""
         import random

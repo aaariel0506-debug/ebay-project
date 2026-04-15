@@ -286,3 +286,89 @@ class TestCancelReceipt:
         svc = InboundService()
         with pytest.raises(ValueError, match="无法取消"):
             svc.cancel_receipt(receipt.id)
+
+
+class TestOutbound:
+    """outbound / return_inventory 逻辑测试。"""
+
+    def test_outbound_success(self, sample_product, db_session):
+        """正常出库：库存充足，创建 OUT 记录，发布 STOCK_OUT 事件。"""
+        from core.models import Inventory, InventoryType
+
+        # 先入库 10 件
+        inv_in = Inventory(
+            sku=sample_product.sku,
+            type=InventoryType.IN,
+            quantity=10,
+            operator="setup",
+        )
+        db_session.add(inv_in)
+        db_session.commit()
+
+        svc = InboundService()
+        result = svc.outbound(
+            sku=sample_product.sku,
+            quantity=3,
+            related_order="ORDER-001",
+            operator="test",
+        )
+
+        assert result["quantity"] == 3
+        assert result["remaining_stock"] == 7
+
+    def test_outbound_insufficient_raises(self, sample_product, db_session):
+        """库存不足时抛出 ValueError。"""
+        from core.models import Inventory, InventoryType
+
+        # 只入库 5 件
+        inv_in = Inventory(
+            sku=sample_product.sku,
+            type=InventoryType.IN,
+            quantity=5,
+        )
+        db_session.add(inv_in)
+        db_session.commit()
+
+        svc = InboundService()
+        with pytest.raises(ValueError, match="库存不足"):
+            svc.outbound(sku=sample_product.sku, quantity=10)
+
+    def test_outbound_zero_quantity_raises(self, sample_product):
+        """出库数量 <= 0 时抛出 ValueError。"""
+        svc = InboundService()
+        with pytest.raises(ValueError, match="出库数量必须"):
+            svc.outbound(sku=sample_product.sku, quantity=0)
+
+    def test_return_inventory_success(self, sample_product, db_session):
+        """退货入库：创建 RETURN 记录，发布 STOCK_RETURN 事件。"""
+        svc = InboundService()
+        result = svc.return_inventory(
+            sku=sample_product.sku,
+            quantity=2,
+            related_order="ORDER-002",
+            operator="test",
+        )
+        assert result["quantity"] == 2
+        assert result["sku"] == sample_product.sku
+
+    def test_list_outbound_filters(self, sample_product, db_session):
+        """按 SKU / 订单号筛选出库记录。"""
+        from core.models import Inventory, InventoryType
+
+        for qty, order in [(5, "A"), (3, "B"), (2, "A")]:
+            inv = Inventory(
+                sku=sample_product.sku,
+                type=InventoryType.OUT,
+                quantity=qty,
+                related_order=order,
+            )
+            db_session.add(inv)
+        db_session.commit()
+
+        svc = InboundService()
+        all_rows = svc.list_outbound(sku=sample_product.sku)
+        order_a = svc.list_outbound(related_order="A")
+
+        assert len(all_rows) == 3
+        assert len(order_a) == 2
+        assert all(r["related_order"] == "A" for r in order_a)
