@@ -538,3 +538,38 @@ class ListingService:
             accepted_urls=valid_urls,
             results=results,
         )
+
+    def list_listings(
+        self,
+        *,
+        status: str | None = None,
+        sku: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list:
+        """Query EbayListing records."""
+        from core.database.connection import get_session
+        from core.models import EbayListing, ListingStatus
+
+        with get_session() as sess:
+            q = sess.query(EbayListing)
+            if status:
+                try:
+                    st = ListingStatus(status)
+                    q = q.filter(EbayListing.status == st)
+                except ValueError:
+                    q = q.filter(EbayListing.status == status)
+            if sku:
+                q = q.filter(EbayListing.sku == sku)
+            q = q.order_by(EbayListing.created_at.desc())
+            q = q.offset(offset).limit(limit)
+            return list(q.all())
+
+    def get_listing(self, ebay_item_id: str):
+        """Fetch a single EbayListing by ebay_item_id."""
+        from core.database.connection import get_session
+
+        with get_session() as sess:
+            return sess.query(EbayListing).filter(
+                EbayListing.ebay_item_id == ebay_item_id
+            ).first()
