@@ -495,6 +495,17 @@ class ListingService:
         with get_session() as s:
             for i, variant in enumerate(req.variants):
                 info = variants[i]
+                # 构建变体组信息（存入 variants JSON，供后续变体级别查询）
+                variant_data = {
+                    "group_id": group_id,
+                    "parent_title": req.group_title,
+                    "variant_specifics": {
+                        s.name: s.value for s in variant.variant_specifics
+                    },
+                    "siblings": [v.sku for v in req.variants],
+                    "total_variants": len(req.variants),
+                }
+
                 listing = EbayListing(
                     ebay_item_id=info.get("listing_id") or f"group-{group_id}-{variant.sku}",
                     sku=variant.sku,
@@ -502,6 +513,7 @@ class ListingService:
                     listing_price=variant.price,
                     quantity_available=variant.quantity,
                     status=ListingStatus.ACTIVE if info.get("status") == "ACTIVE" else ListingStatus.DRAFT,
+                    variants=variant_data,
                 )
                 s.add(listing)
 

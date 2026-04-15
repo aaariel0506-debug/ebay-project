@@ -201,3 +201,126 @@ class InventoryMonitor:
                 "low_stock": low,
                 "ended": ended,
             }
+
+    # ── 变体级别库存 ──────────────────────────────────────────────────────
+
+    def list_variant_groups(self) -> list:
+        """列出所有变体组的库存汇总。"""
+        from core.database.connection import get_session
+        from core.models import EbayListing
+
+        with get_session() as sess:
+            listings = sess.query(EbayListing).filter(
+                EbayListing.variants.isnot(None)
+            ).all()
+
+        from modules.inventory_online.variant_utils import group_variants
+        return group_variants(listings)
+
+    def list_out_of_stock_variants(self) -> list:
+        """列出所有缺货变体（含变体维度信息）。"""
+        from core.database.connection import get_session
+        from core.models import EbayListing, ListingStatus
+
+        with get_session() as sess:
+            listings = sess.query(EbayListing).filter(
+                EbayListing.status == ListingStatus.ACTIVE,
+                EbayListing.quantity_available == 0,
+            ).all()
+
+        from modules.inventory_online.variant_utils import list_variants_by_filter
+        return list_variants_by_filter(listings)
+
+    def list_low_stock_variants(self, threshold: int = DEFAULT_LOW_STOCK_THRESHOLD) -> list:
+        """列出所有低库存变体。"""
+        from core.database.connection import get_session
+        from core.models import EbayListing, ListingStatus
+
+        with get_session() as sess:
+            listings = sess.query(EbayListing).filter(
+                EbayListing.status == ListingStatus.ACTIVE,
+                EbayListing.quantity_available > 0,
+                EbayListing.quantity_available <= threshold,
+            ).all()
+
+        from modules.inventory_online.variant_utils import list_variants_by_filter
+        return list_variants_by_filter(listings)
+
+    def get_variant_alerts(self) -> dict:
+        """变体级别预警：检查 partial_out_of_stock / fully_out_of_stock。
+
+        Returns:
+            dict: {partial: [...], fully: [...]}
+        """
+
+        groups = self.list_variant_groups()
+        partial, fully = [], []
+
+        for g in groups:
+            if g.aggregate_status == "FULLY_OUT_OF_STOCK":
+                fully.append(g)
+            elif g.aggregate_status == "PARTIAL_OUT_OF_STOCK":
+                partial.append(g)
+
+        return {"partial_out_of_stock": partial, "fully_out_of_stock": fully}
+
+    def check_and_alert_variants(self) -> dict:
+        """变体级别检查 + 发布变体预警事件。
+
+        Returns:
+            dict: alert summary
+        """
+        alerts = self.get_variant_alerts()
+        self._publish_variant_alerts(
+            alerts["partial_out_of_stock"],
+            alerts["fully_out_of_stock"],
+        )
+        return alerts
+
+    def _publish_variant_alerts(
+        self,
+        partial_groups: list,
+        fully_groups: list,
+    ) -> None:
+        """发布变体级别 STOCK_ALERT 事件。"""
+        from core.events.bus import EventBus
+
+        bus = EventBus()
+
+        if fully_groups:
+            for g in fully_groups:
+                bus.publish(
+                    event_type="STOCK_ALERT",
+                    payload={
+                        "alert_type": "FULLY_OUT_OF_STOCK_VARIANT",
+                        "group_id": g.group_id,
+                        "parent_title": g.parent_title,
+                        "skus": g.out_of_stock_skus(),
+                        "variant_details": [
+                            {"sku": v.sku, "specifics": v.display_name, "quantity": v.quantity}
+                            for v in g.variants
+                        ],
+                        "message": f"变体组 {g.group_id} 全部 {len(g.variants)} 个变体缺货",
+                    },
+                )
+            log.warning(f"STOCK_ALERT: {len(fully_groups)} 个变体组全部缺货 — {[g.group_id for g in fully_groups]}")
+
+        if partial_groups:
+            for g in partial_groups:
+                oos_skus = g.out_of_stock_skus()
+                bus.publish(
+                    event_type="STOCK_ALERT",
+                    payload={
+                        "alert_type": "PARTIAL_OUT_OF_STOCK_VARIANT",
+                        "group_id": g.group_id,
+                        "parent_title": g.parent_title,
+                        "out_of_stock_skus": oos_skus,
+                        "low_stock_skus": g.low_stock_skus(),
+                        "variant_details": [
+                            {"sku": v.sku, "specifics": v.display_name, "quantity": v.quantity, "status": v.status}
+                            for v in g.variants
+                        ],
+                        "message": f"变体组 {g.group_id} 部分变体缺货: {oos_skus}",
+                    },
+                )
+            log.warning(f"STOCK_ALERT: {len(partial_groups)} 个变体组部分缺货 — {[g.group_id for g in partial_groups]}")
