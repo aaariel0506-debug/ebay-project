@@ -19,7 +19,6 @@ from pathlib import Path
 
 from loguru import logger as log
 
-
 # 默认阈值
 DEFAULT_PRICE_CHANGE_THRESHOLD = 0.10  # 10%
 DEFAULT_MIN_PROFIT_MARGIN = 0.15       # 15%
@@ -86,9 +85,9 @@ class PriceMonitor:
             ValueError: SKU 不存在或价格格式无效
         """
         from core.database.connection import get_session
+        from core.events.bus import EventBus
         from core.models import Product
         from core.models.price_history import SupplierPriceHistory
-        from core.events.bus import EventBus
 
         try:
             new_price = Decimal(str(new_price))

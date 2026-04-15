@@ -11,13 +11,17 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from core.models.base import Base, TimestampMixin
 from sqlalchemy import Date, ForeignKey, Index, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+if TYPE_CHECKING:
+    from core.models.product import Product
 
-class PriceChangeDirection( str ):
+
+class PriceChangeDirection(str):
     """价格变化方向枚举。"""
     UP = "up"
     DOWN = "down"
@@ -46,7 +50,7 @@ class SupplierPriceHistory(Base, TimestampMixin):
     note: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     # 关联 product（方便 join）
-    product: Mapped["Product"] = relationship(  # type: ignore[name-defined]
+    product: Mapped["Product"] = relationship(  # type: ignore[valid-type]
         "Product",
         back_populates="_price_history",
         lazy="select",

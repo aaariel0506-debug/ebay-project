@@ -91,7 +91,7 @@ def _cmd_price_check(args) -> int:
     if args.file:
         result = pm.batch_update_from_csv(args.file)
         print(f"\n{'='*50}")
-        print(f"批量价格更新结果")
+        print("批量价格更新结果")
         print(f"{'='*50}")
         print(f"总计: {result.total} | 成功: {result.success} | 失败: {result.failed}")
 

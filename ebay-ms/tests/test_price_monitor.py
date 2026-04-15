@@ -14,12 +14,7 @@ class TestUpdateCostPrice:
 
     def test_change_rate_up_triggers_alert(self):
         """进货价上涨超过 10%，触发 PRICE_ALERT。"""
-        from modules.inventory_online.price_monitor import PriceMonitor
-
-        pm = PriceMonitor(price_change_threshold=0.10)
-
-        # 模拟：Product 存在，进货价 100 → 120（+20%）
-        # 需要 DB fixture... 这里测试 change_rate 计算逻辑
+        # 需要 DB fixture，这里占位；change_rate 计算逻辑见 TestPriceChangeRate
         pass  # 依赖 DB，下方用 integration 方式测试
 
     def test_change_rate_down_triggers_alert(self):
@@ -110,8 +105,9 @@ class TestPriceChangeAlert:
     """PriceChangeAlert 数据类测试。"""
 
     def test_alert_dataclass_creation(self):
-        from modules.inventory_online.price_monitor import PriceChangeAlert
         from decimal import Decimal
+
+        from modules.inventory_online.price_monitor import PriceChangeAlert
 
         alert = PriceChangeAlert(
             sku="02-2603-0001",
@@ -136,9 +132,9 @@ class TestPriceMonitorInit:
 
     def test_default_thresholds(self):
         from modules.inventory_online.price_monitor import (
-            PriceMonitor,
-            DEFAULT_PRICE_CHANGE_THRESHOLD,
             DEFAULT_MIN_PROFIT_MARGIN,
+            DEFAULT_PRICE_CHANGE_THRESHOLD,
+            PriceMonitor,
         )
 
         pm = PriceMonitor()
