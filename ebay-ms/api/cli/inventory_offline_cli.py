@@ -77,6 +77,25 @@ def run_inventory_offline_cmd(argv: list[str]) -> int:
     p_out_list.add_argument("--date-to", dest="end_date", help="结束日期（YYYY-MM-DD）")
     p_out_list.add_argument("--limit", type=int, default=100)
 
+    # stocktake 子命令
+    p_stk_start = sub.add_parser("stocktake-start", help="开始新盘点")
+    p_stk_start.add_argument("--skus", help="要盘点的 SKU 列表（逗号分隔，默认全部）")
+    p_stk_start.add_argument("--operator", help="操作人")
+
+    p_stk_record = sub.add_parser("stocktake-record", help="录入实际清点数量")
+    p_stk_record.add_argument("--id", required=True, type=int, dest="stocktake_id", help="盘点单 ID")
+    p_stk_record.add_argument(
+        "--file", type=Path, required=True,
+        help="清点数据 CSV，格式：sku,actual_quantity[,note]",
+    )
+
+    p_stk_finish = sub.add_parser("stocktake-finish", help="结束盘点并生成调整记录")
+    p_stk_finish.add_argument("--id", required=True, type=int, dest="stocktake_id", help="盘点单 ID")
+
+    p_stk_list = sub.add_parser("stocktake-list", help="列出现有盘点单")
+    p_stk_list.add_argument("--status", choices=["in_progress", "finished", "cancelled"])
+    p_stk_list.add_argument("--limit", type=int, default=50)
+
     args = parser.parse_args(argv)
 
     # ── 路由 ───────────────────────────────────────
@@ -99,6 +118,14 @@ def run_inventory_offline_cmd(argv: list[str]) -> int:
         return _cmd_return_in(args)
     if args.cmd == "outbound-list":
         return _cmd_outbound_list(args)
+    if args.cmd == "stocktake-start":
+        return _cmd_stocktake_start(args)
+    if args.cmd == "stocktake-record":
+        return _cmd_stocktake_record(args)
+    if args.cmd == "stocktake-finish":
+        return _cmd_stocktake_finish(args)
+    if args.cmd == "stocktake-list":
+        return _cmd_stocktake_list(args)
 
     parser.print_help()
     return 0
@@ -310,6 +337,73 @@ def _cmd_outbound_list(args) -> int:
         print(
             f"{ts:<26}  {r['sku']:<20}  {r['quantity']:>5}  "
             f"{r['related_order'] or '—':<15}  {r['operator'] or '—'}"
+        )
+    print(f"\n共 {len(rows)} 条")
+    return 0
+
+
+def _cmd_stocktake_start(args) -> int:
+    from modules.inventory_offline.stocktake_service import StocktakeService
+
+    skus = args.skus.split(",") if args.skus else None
+    svc = StocktakeService()
+    result = svc.start_stocktake(skus=skus, operator=args.operator)
+    print(f"✅ 创建盘点单 #{result['stocktake_id']}，{result['items_count']} 个 SKU，已锁定系统库存")
+    return 0
+
+
+def _cmd_stocktake_record(args) -> int:
+    import csv
+
+    from modules.inventory_offline.stocktake_service import StocktakeService
+
+    counts = {}
+    with open(args.file, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            counts[row["sku"].strip()] = int(row["actual_quantity"].strip())
+
+    svc = StocktakeService()
+    result = svc.record_count(stocktake_id=args.stocktake_id, counts=counts)
+
+    print(f"✅ 录入 {result['items_updated']} 项，{len(result['differences'])} 项有差异：")
+    for d in result["differences"]:
+        print(f"   {d['sku']}: 系统{d['system']} → 实际{d['actual']}，差异 {d['diff']:+d}")
+    return 0
+
+
+def _cmd_stocktake_finish(args) -> int:
+    from modules.inventory_offline.stocktake_service import StocktakeService
+
+    svc = StocktakeService()
+    result = svc.finish_stocktake(stocktake_id=args.stocktake_id)
+
+    print(
+        f"✅ 盘点单 #{result.stocktake_id} 已结束："
+        f"{result.items_count} 项已清点，"
+        f"{result.adjustment_records} 条调整记录，"
+        f"总差异 {result.total_difference:+d}"
+    )
+    return 0
+
+
+def _cmd_stocktake_list(args) -> int:
+    from modules.inventory_offline.stocktake_service import StocktakeService
+
+    svc = StocktakeService()
+    rows = svc.list_stocktakes(status=args.status, limit=args.limit)
+
+    if not rows:
+        print("（无盘点单）")
+        return 0
+
+    print(f"{'ID':>4}  {'状态':<12}  {'开始时间':<26}  {'结束时间':<26}  {'操作人'}")
+    print("-" * 90)
+    for r in rows:
+        started = r["started_at"].strftime("%Y-%m-%d %H:%M") if r["started_at"] else "—"
+        finished = r["finished_at"].strftime("%Y-%m-%d %H:%M") if r["finished_at"] else "—"
+        print(
+            f"{r['id']:>4}  {r['status']:<12}  {started:<26}  {finished:<26}  {r['operator'] or '—'}"
         )
     print(f"\n共 {len(rows)} 条")
     return 0

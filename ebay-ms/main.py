@@ -144,6 +144,21 @@ def run() -> int:
     p_out_list.add_argument("--date-to", dest="end_date")
     p_out_list.add_argument("--limit", type=int, default=100)
 
+    p_stk_start = inv_offline_sub.add_parser("stocktake-start", help="开始新盘点")
+    p_stk_start.add_argument("--skus")
+    p_stk_start.add_argument("--operator")
+
+    p_stk_record = inv_offline_sub.add_parser("stocktake-record", help="录入实际清点数量")
+    p_stk_record.add_argument("--id", required=True, type=int, dest="stocktake_id")
+    p_stk_record.add_argument("--file", type=str, required=True)
+
+    p_stk_finish = inv_offline_sub.add_parser("stocktake-finish", help="结束盘点并生成调整记录")
+    p_stk_finish.add_argument("--id", required=True, type=int, dest="stocktake_id")
+
+    p_stk_list = inv_offline_sub.add_parser("stocktake-list", help="列出现有盘点单")
+    p_stk_list.add_argument("--status")
+    p_stk_list.add_argument("--limit", type=int, default=50)
+
     args = parser.parse_args()
 
     if args.module is None:
