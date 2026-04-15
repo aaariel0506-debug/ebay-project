@@ -83,22 +83,42 @@ class TestUpdateCostPrice:
     def test_invalid_price_raises(self):
         """无效价格（负数/非数字）抛出 ValueError。"""
         from decimal import Decimal, InvalidOperation
-        from unittest.mock import patch
-
-        from modules.inventory_online.price_monitor import PriceMonitor
+        from unittest.mock import MagicMock, patch
 
         # Decimal("abc") 抛出 InvalidOperation
         with pytest.raises(InvalidOperation):
             Decimal("abc")
 
-        # 负数进货价应被 PriceMonitor 拒绝
-        pm = PriceMonitor()
-        with patch.object(pm, "update_cost_price", wraps=pm.update_cost_price):
-            pass  # 校验逻辑测试：Decimal("-1") 不应被接受
+        # PriceMonitor 拒绝负数进货价（需要 mock DB 返回一个 Product + EbayListing）
+        mock_product = MagicMock()
+        mock_product.sku = "TEST-SKU"
+        mock_product.cost_price = Decimal("100")
+        mock_product.cost_currency = "JPY"
+        mock_product.title = "Test"
+        mock_product.supplier = None
 
-        # 验证 Decimal 负数构造不抛异常（但会被业务层拒绝）
-        neg = Decimal("-1")
-        assert neg < 0
+        mock_listing = MagicMock()
+        mock_listing.sku = "TEST-SKU"
+        mock_listing.ebay_item_id = "ITEM001"
+        mock_listing.listing_price = None
+        mock_listing.quantity_available = 10
+        mock_listing.title = "Test"
+
+        mock_sess = MagicMock()
+        mock_sess.__enter__ = MagicMock(return_value=mock_sess)
+        mock_sess.__exit__ = MagicMock(return_value=False)
+        # Product 查询返回 mock_product，EbayListing 查询返回 mock_listing
+        mock_sess.query.return_value.filter.return_value.first.side_effect = [
+            mock_product,
+            mock_listing,
+        ]
+
+        with patch("core.database.connection.get_session", return_value=mock_sess):
+            from modules.inventory_online.price_monitor import PriceMonitor
+
+            pm = PriceMonitor()
+            with pytest.raises(ValueError, match="进货价必须"):
+                pm.update_cost_price(sku="TEST-SKU", new_price=Decimal("-1"))
 
     def test_nonexistent_sku_raises(self):
         """SKU 不存在时抛出 ValueError。"""

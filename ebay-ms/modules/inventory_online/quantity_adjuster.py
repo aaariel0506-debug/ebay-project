@@ -93,8 +93,7 @@ class QuantityAdjuster:
             try:
                 self._update_ebay_inventory(sku, new_quantity, listing.ebay_item_id)
             except Exception as e:
-                logger = log.error
-                logger(f"eBay API 更新 {sku} 库存失败: {e}")
+                log.error(f"eBay API 更新 {sku} 库存失败: {e}")
                 return AdjustmentResult(
                     sku=sku,
                     old_quantity=old_quantity,
@@ -106,6 +105,9 @@ class QuantityAdjuster:
             # 更新本地 DB
             listing.quantity_available = new_quantity
             sess.commit()
+
+            # 审计日志
+            self._audit_adjustment(sku, old_quantity, new_quantity)
 
             if publish_event:
                 self._publish_update_event(sku, old_quantity, new_quantity, listing.title)
@@ -201,15 +203,10 @@ class QuantityAdjuster:
         """
         调用 eBay Inventory API 更新库存。
 
-        eBay Inventory API: POST /inventory_item/{sku}
+        eBay Inventory API: PUT /inventory_item/{sku}
         Body: { "availability": { "shipToLocationAvailability": { "quantity": N } } }
         """
-        from core.ebay_api.auth import EbayAuth
-
-        auth = EbayAuth()
-        token = auth.get_access_token()
-
-        endpoint = f"{auth._get_api_url()}/inventory_item/{sku}"
+        endpoint = f"/inventory_item/{sku}"
         payload = {
             "availability": {
                 "shipToLocationAvailability": {
@@ -217,18 +214,9 @@ class QuantityAdjuster:
                 }
             }
         }
+        # 使用 EbayClient 公开 put() 方法（自带重试/限流/401 自动刷新）
+        self._client.put(endpoint, json_body=payload, use_user_token=True)
 
-        resp = self._client._session.put(  # type: ignore[attr-defined]
-            endpoint,
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-        )
-        if not resp.is_success:
-            from core.ebay_api.exceptions import EbayApiError
-            raise EbayApiError(f"eBay API 返回 {resp.status_code}: {resp.text}")
 
     def _publish_update_event(
         self,
@@ -253,3 +241,23 @@ class QuantityAdjuster:
             },
         )
         log.info(f"LISTING_UPDATED: {sku} 库存 {old_qty} → {new_qty}")
+
+    def _audit_adjustment(
+        self,
+        sku: str,
+        old_qty: int,
+        new_qty: int,
+    ) -> None:
+        """记录库存调整审计日志。"""
+        from core.security.audit import audit_log
+
+        audit_log(
+            action="inventory_adjust",
+            operator="system",
+            detail={
+                "sku": sku,
+                "old_quantity": old_qty,
+                "new_quantity": new_qty,
+                "change": new_qty - old_qty,
+            },
+        )
