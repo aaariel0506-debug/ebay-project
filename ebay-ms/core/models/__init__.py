@@ -1,6 +1,7 @@
 """core.models — 所有 ORM 模型"""
 from core.models.base import Base, TimestampMixin
 from core.models.batch import BatchProgress
+from core.models.inbound import InboundReceipt, InboundReceiptItem, InboundStatus
 from core.models.inventory import Inventory, InventoryType
 from core.models.listing import EbayListing, ListingStatus
 from core.models.order import Order, OrderStatus
@@ -26,6 +27,9 @@ __all__ = [
     "ListingTemplate",
     "BatchProgress",
     "SupplierPriceHistory",
+    "InboundReceipt",
+    "InboundReceiptItem",
+    "InboundStatus",
 ]
 
 # Product → SupplierPriceHistory 反向关联（在模块加载时设置）

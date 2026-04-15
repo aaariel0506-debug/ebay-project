@@ -4,7 +4,7 @@ core/models/base.py
 """
 from datetime import datetime
 
-from sqlalchemy import DateTime, func
+from sqlalchemy import DateTime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -17,12 +17,12 @@ class TimestampMixin:
     """自动管理 created_at 和 updated_at"""
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        server_default=func.now(),
+        default=lambda: datetime.now(),
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        server_default=func.now(),
-        onupdate=func.now(),
+        default=lambda: datetime.now(),
+        onupdate=lambda: datetime.now(),
         nullable=False,
     )
