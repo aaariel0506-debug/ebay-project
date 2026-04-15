@@ -122,6 +122,28 @@ def run() -> int:
     p_stk_all = inv_offline_sub.add_parser("stock-all", help="查询所有 SKU 库存快照")
     p_stk_all.add_argument("--limit", type=int, default=200)
 
+    p_out = inv_offline_sub.add_parser("outbound", help="出库记录")
+    p_out.add_argument("--sku", required=True)
+    p_out.add_argument("--quantity", required=True, type=int)
+    p_out.add_argument("--order", dest="related_order")
+    p_out.add_argument("--operator")
+    p_out.add_argument("--location")
+    p_out.add_argument("--note")
+
+    p_ret = inv_offline_sub.add_parser("return-in", help="退货入库")
+    p_ret.add_argument("--sku", required=True)
+    p_ret.add_argument("--quantity", required=True, type=int)
+    p_ret.add_argument("--order", dest="related_order")
+    p_ret.add_argument("--operator")
+    p_ret.add_argument("--note")
+
+    p_out_list = inv_offline_sub.add_parser("outbound-list", help="查询出库记录")
+    p_out_list.add_argument("--sku")
+    p_out_list.add_argument("--order", dest="related_order")
+    p_out_list.add_argument("--date-from", dest="start_date")
+    p_out_list.add_argument("--date-to", dest="end_date")
+    p_out_list.add_argument("--limit", type=int, default=100)
+
     args = parser.parse_args()
 
     if args.module is None:

@@ -73,6 +73,8 @@ def run_inventory_offline_cmd(argv: list[str]) -> int:
     p_out_list = sub.add_parser("outbound-list", help="查询出库记录")
     p_out_list.add_argument("--sku", help="按 SKU 筛选")
     p_out_list.add_argument("--order", dest="related_order", help="按订单号筛选")
+    p_out_list.add_argument("--date-from", dest="start_date", help="开始日期（YYYY-MM-DD）")
+    p_out_list.add_argument("--date-to", dest="end_date", help="结束日期（YYYY-MM-DD）")
     p_out_list.add_argument("--limit", type=int, default=100)
 
     args = parser.parse_args(argv)
@@ -273,12 +275,25 @@ def _cmd_return_in(args) -> int:
 
 
 def _cmd_outbound_list(args) -> int:
+    from datetime import datetime
+
     from modules.inventory_offline import InboundService
 
     svc = InboundService()
+
+    # 解析日期参数
+    start_date = None
+    end_date = None
+    if args.start_date:
+        start_date = datetime.strptime(args.start_date, "%Y-%m-%d")
+    if args.end_date:
+        end_date = datetime.strptime(args.end_date, "%Y-%m-%d")
+
     rows = svc.list_outbound(
         sku=args.sku,
         related_order=args.related_order,
+        start_date=start_date,
+        end_date=end_date,
         limit=args.limit,
     )
 

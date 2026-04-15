@@ -553,6 +553,12 @@ class InboundService:
             sess.add(inv)
             sess.commit()
 
+            # 查询 cost_price（用于财务记账）
+            prod = sess.query(self._Product).filter(
+                self._Product.sku == sku
+            ).first()
+            cost_price = str(prod.cost_price) if prod else None
+
             # 发布 STOCK_OUT 事件
             bus = self._EventBus()
             bus.publish(
@@ -561,6 +567,7 @@ class InboundService:
                     "sku": sku,
                     "quantity": quantity,
                     "related_order": related_order,
+                    "cost_price": cost_price,
                     "operator": operator,
                     "occurred_at": now.isoformat(),
                 },
