@@ -7,6 +7,7 @@ from core.models.listing import EbayListing, ListingStatus
 from core.models.order import Order, OrderStatus
 from core.models.price_history import SupplierPriceHistory
 from core.models.product import Product, ProductStatus
+from core.models.stocktake import Stocktake, StocktakeItem, StocktakeStatus
 from core.models.template import ListingTemplate
 from core.models.transaction import Transaction, TransactionType
 from sqlalchemy.orm import relationship
@@ -30,6 +31,9 @@ __all__ = [
     "InboundReceipt",
     "InboundReceiptItem",
     "InboundStatus",
+    "Stocktake",
+    "StocktakeItem",
+    "StocktakeStatus",
 ]
 
 # Product → SupplierPriceHistory 反向关联（在模块加载时设置）
