@@ -47,6 +47,46 @@ def run_inventory_online_cmd(argv: list[str]) -> int:
         help="利润率阈值（默认 15%%）",
     )
 
+    # restock-advice：补货建议
+    p_restock = sub.add_parser("restock-advice", help="生成补货建议")
+    p_restock.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        dest="lookback_days",
+        help="分析近 N 天销售数据（默认 30 天）",
+    )
+    p_restock.add_argument(
+        "--urgent-days",
+        type=int,
+        default=7,
+        dest="urgent_days",
+        help="紧急阈值天数（默认 7 天）",
+    )
+    p_restock.add_argument(
+        "--soon-days",
+        type=int,
+        default=14,
+        dest="soon_days",
+        help="近期阈值天数（默认 14 天）",
+    )
+
+    # adjust：eBay 库存调整
+    p_adjust = sub.add_parser("adjust", help="调整 eBay 库存数量")
+    p_adjust.add_argument("--sku", help="单个 SKU")
+    p_adjust.add_argument("--quantity", type=int, help="新的库存数量")
+    p_adjust.add_argument(
+        "--file",
+        type=Path,
+        help="CSV 文件路径（批量），格式：sku,new_quantity",
+    )
+    p_adjust.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="仅打印，不实际调整",
+    )
+
     args = parser.parse_args(argv)
 
     if args.cmd == "price-check":
@@ -55,6 +95,10 @@ def run_inventory_online_cmd(argv: list[str]) -> int:
         return _cmd_price_history(args)
     elif args.cmd == "margin-check":
         return _cmd_margin_check(args)
+    elif args.cmd == "restock-advice":
+        return _cmd_restock_advice(args)
+    elif args.cmd == "adjust":
+        return _cmd_adjust(args)
     else:
         parser.print_help()
         return 0
@@ -152,7 +196,8 @@ def _cmd_margin_check(args) -> int:
             EbayListing.quantity_available > 0,
         ).all()
 
-    print(f"\n利润率低于 {args.min_margin:.1%} 的商品:")
+    min_margin = getattr(args, 'min_margin', 0.15)
+    print(f"\n利润率低于 {min_margin:.1%} 的商品:")
     print(f"{'SKU':<20} {'售价':>8} {'成本':>8} {'利润率':>8}")
     print("-" * 50)
 
@@ -162,7 +207,7 @@ def _cmd_margin_check(args) -> int:
         cost_price = float(product.cost_price)
         if listing_price > 0:
             margin = (listing_price - cost_price) / listing_price
-            if margin < args.min_margin:
+            if margin < min_margin:
                 low_margin_items.append((listing.sku, listing_price, cost_price, margin))
                 print(
                     f"{listing.sku:<20} "
@@ -174,6 +219,49 @@ def _cmd_margin_check(args) -> int:
     if not low_margin_items:
         print("✅ 所有商品利润率达标")
     return 0
+
+
+def _cmd_restock_advice(args) -> int:
+    from modules.inventory_online.restock_advisor import RestockAdvisor
+
+    advisor = RestockAdvisor(
+        urgent_days=args.urgent_days,
+        soon_days=args.soon_days,
+    )
+    advisor.print_report(lookback_days=args.lookback_days)
+    return 0
+
+
+def _cmd_adjust(args) -> int:
+    from modules.inventory_online.quantity_adjuster import QuantityAdjuster
+
+    adjuster = QuantityAdjuster()
+
+    if args.sku is not None and args.quantity is not None:
+        # 单个 SKU 调整
+        result = adjuster.adjust_ebay_quantity(args.sku, args.quantity)
+        if result.success:
+            print(f"✅ {result.sku}: 库存 {result.old_quantity} → {result.new_quantity}")
+        else:
+            print(f"❌ {result.sku}: {result.error}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.file:
+        result = adjuster.batch_adjust_from_csv(args.file, dry_run=args.dry_run)
+        print(f"\n{'='*50}")
+        mode = "[DRY RUN]" if args.dry_run else ""
+        print(f"批量库存调整 {mode}")
+        print(f"{'='*50}")
+        print(f"总计: {result.total} | 成功: {result.success} | 失败: {result.failed}")
+        if result.failed > 0:
+            for r in result.results:
+                if not r.success:
+                    print(f"  ❌ {r.sku}: {r.error}")
+        return 0
+
+    print("请提供 --sku + --quantity 或 --file 参数", file=sys.stderr)
+    return 1
 
 
 def _print_alert(alert) -> None:
