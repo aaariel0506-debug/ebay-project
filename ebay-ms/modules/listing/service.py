@@ -316,14 +316,17 @@ class ListingService:
                 )
 
         # ── Step 2: 创建 InventoryItemGroup ───────────────
+        # group_key = first variant SKU (eBay recommended pattern for multi-variant listings)
+        group_key = req.variants[0].sku
         try:
             group_payload = self._build_inventory_item_group_payload(req)
-            group_resp = self.client.post(
-                "/sell/inventory/v1/inventory_item_group",
+            # PUT /sell/inventory/v1/inventory_item_group/{inventoryItemGroupKey}
+            group_resp = self.client.put(
+                f"/sell/inventory/v1/inventory_item_group/{group_key}",
                 json_body=group_payload,
             )
-            group_id = group_resp.get("groupId")
-            log.info(f"Step 2 完成: group_id={group_id}")
+            group_id = group_resp.get("groupId") or group_key
+            log.info(f"Step 2 完成: group_key={group_key}")
         except EbayApiError as exc:
             log.error(f"Step 2 失败 (InventoryItemGroup): {exc}")
             errors.append(f"inventory_item_group: {exc}")
@@ -347,21 +350,27 @@ class ListingService:
                 errors.append(f"create_offer({variant.sku}): {exc}")
                 offer_ids.append(None)
 
-        # ── Step 4: 发布所有 Offer ─────────────────────────
-        for i, variant in enumerate(req.variants):
-            offer_id = offer_ids[i]
-            if offer_id is None:
-                variants_created[i]["status"] = "OFFER_CREATE_FAILED"
-                continue
-            try:
-                listing_id = self._publish_variant_offer(offer_id)
-                variants_created[i]["listing_id"] = listing_id
-                variants_created[i]["status"] = "ACTIVE"
-                log.info(f"Step 4 完成: offer_id={offer_id}, listing_id={listing_id}")
-            except EbayApiError as exc:
-                log.error(f"Step 4 失败 offer_id={offer_id}: {exc}")
-                errors.append(f"publish_offer({variant.sku}): {exc}")
-                variants_created[i]["status"] = "PUBLISH_FAILED"
+        # ── Step 4: 批量发布所有 Offers（publishOfferByInventoryItemGroup） ──
+        # eBay API: POST /sell/inventory/v1/offer/publish_by_inventory_item_group/{inventoryItemGroupKey}
+        # 一条 API 调用把该 group 下所有未发布的 offer 全部上线
+        try:
+            publish_resp = self.client.post(
+                f"/sell/inventory/v1/offer/publish_by_inventory_item_group/{group_key}",
+                json_body={},
+            )
+            # publishResp 返回 all listingIds for the group
+            listings_map = publish_resp.get("listingId", [])
+            if isinstance(listings_map, dict):
+                # Some responses return a mapping
+                pass
+            log.info(f"Step 4 完成: group_key={group_key}")
+        except EbayApiError as exc:
+            log.error(f"Step 4 失败 (publishOfferByInventoryItemGroup): {exc}")
+            errors.append(f"publish_by_group: {exc}")
+            # Mark all as publish failed (individual listingIds unavailable)
+            for i in range(len(req.variants)):
+                if offer_ids[i] is not None:
+                    variants_created[i]["status"] = "PUBLISH_FAILED"
 
         # ── Step 5: DB 写入 + 事件发布 ──────────────────────
         try:

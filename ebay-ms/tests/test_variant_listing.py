@@ -318,16 +318,21 @@ class TestVariantServiceUnit:
         mock_event_bus = MagicMock()
         service._event_bus = mock_event_bus
 
-        # Path-based mock: returns correct response per URL path
+        # Path-based mock: POST order = offer-M, offer-L, publish-by-group
         def post_response(path, **kwargs):
-            if "inventory_item_group" in path:
-                return {"groupId": "group-abc"}
-            if "/publish" in path:
-                return {"listingId": f"item-{path.split('/')[3]}"}
-            return {"offerId": f"offer-{kwargs.get('json_body', {}).get('sku', 'X')}"}
+            sku = kwargs.get("json_body", {}).get("sku", "X")
+            if "publish_by_inventory_item_group" in path:
+                # POST /sell/inventory/v1/offer/publish_by_inventory_item_group/{key}
+                return {"listingId": ["item-M", "item-L"]}
+            # createOffer responses
+            return {"offerId": f"offer-{sku}"}
 
         mock_client.post.side_effect = post_response
-        mock_client.put.side_effect = [{"sku": "X"}, {"sku": "X"}]
+        mock_client.put.side_effect = [
+            {"sku": "TSHIRT-M"},   # variant M inventory item
+            {"sku": "TSHIRT-L"},   # variant L inventory item
+            {"groupId": "group-abc"},  # inventory item group
+        ]
         mock_client.delete.return_value = {}
 
         with patch("modules.listing.service.get_session"):
@@ -337,8 +342,8 @@ class TestVariantServiceUnit:
         assert resp.group_id == "group-abc"
         assert len(resp.variants) == 2
         assert resp.errors == []
-        assert mock_client.put.call_count == 2
-        assert mock_client.post.call_count == 5
+        assert mock_client.put.call_count == 3
+        assert mock_client.post.call_count == 3
         mock_event_bus.publish.assert_called_once()
         call_args = mock_event_bus.publish.call_args
         assert call_args[0][0] == "LISTING_CREATED"
