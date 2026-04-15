@@ -1,17 +1,29 @@
 """modules.listing — eBay Listing 管理模块"""
 from modules.listing.schemas import (
+    ImageUploadRequest,
+    ImageUploadResponse,
+    ImageValidationResult,
+    InventoryItemGroupRequest,
     InventoryItemRequest,
     ListingCreateRequest,
     ListingCreateResponse,
     ListingRecord,
     OfferRequest,
+    VariantItem,
+    VariantListingCreateResponse,
+    VariantSpecific,
 )
 from modules.listing.service import ListingCreateError, ListingService
 from modules.listing.utils import (
+    ALLOWED_IMAGE_FORMATS,
     EBAY_CONDITION_MAP,
     EBAY_CONDITIONS,
     EBAY_MARKETPLACE_IDS,
+    MAX_IMAGE_SIZE_BYTES,
+    build_inventory_item_group,
+    build_variant_payload,
     normalize_condition,
+    validate_image_files,
 )
 
 __all__ = [
@@ -19,11 +31,23 @@ __all__ = [
     "ListingCreateError",
     "ListingCreateRequest",
     "ListingCreateResponse",
-    "ListingRecord",
     "InventoryItemRequest",
     "OfferRequest",
+    "InventoryItemGroupRequest",
+    "VariantSpecific",
+    "VariantItem",
+    "VariantListingCreateResponse",
+    "ImageUploadRequest",
+    "ImageUploadResponse",
+    "ImageValidationResult",
+    "ListingRecord",
     "normalize_condition",
     "EBAY_CONDITION_MAP",
     "EBAY_CONDITIONS",
     "EBAY_MARKETPLACE_IDS",
+    "build_inventory_item_group",
+    "build_variant_payload",
+    "validate_image_files",
+    "ALLOWED_IMAGE_FORMATS",
+    "MAX_IMAGE_SIZE_BYTES",
 ]

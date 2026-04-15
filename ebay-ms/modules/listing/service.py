@@ -7,16 +7,24 @@ from core.ebay_api.exceptions import EbayApiError
 from core.events.bus import get_event_bus
 from core.models import EbayListing, ListingStatus, Product
 from core.utils.logger import get_logger
+from modules.listing import schemas as ls
 from modules.listing.schemas import (
+    ImageUploadResponse,
+    InventoryItemGroupRequest,
     InventoryItemResponse,
     ListingCreateRequest,
     ListingCreateResponse,
+    VariantItem,
+    VariantListingCreateResponse,
 )
 from modules.listing.utils import (
     build_inventory_availability,
+    build_inventory_item_group,
     build_offers_pricing_summary,
+    build_variant_payload,
     extract_listing_id_from_href,
     normalize_condition,
+    validate_image_files,
 )
 
 log = get_logger("listing_service")
@@ -256,3 +264,268 @@ class ListingService:
                 s.add(product)
 
             s.commit()
+
+
+    # ── Variant Listing ───────────────────────────────────────
+
+    def create_variant_listing(
+        self, req: InventoryItemGroupRequest
+    ) -> VariantListingCreateResponse:
+        """
+        创建变体 Listing（多变体多 offer）。
+
+        流程：
+          1. 为每个 VariantItem 调用 createOrReplaceInventoryItem
+          2. 创建 InventoryItemGroup（关联所有变体）
+          3. 为每个变体创建 Offer
+          4. 发布所有 Offer
+          5. DB 写入（多记录）+ 事件发布
+
+        失败策略：
+          - Step 1 失败：返回错误（无回滚）
+          - Step 2 失败：回滚所有 Step 1 创建的 inventory items
+          - Step 3 失败：回滚 Step 2 + 所有 Step 1
+          - Step 4 失败：记录失败的 offer，不回滚成功部分
+        """
+
+        variants_created: list[dict] = []
+        errors: list[str] = []
+        skus_created: list[str] = []
+        group_id: str | None = None
+
+        log.info(f"开始创建变体 Listing: {len(req.variants)} 个变体")
+
+        # ── Step 1: 创建每个变体的 InventoryItem ───────────
+        for variant in req.variants:
+            try:
+                payload = self._build_variant_inventory_payload(variant, req)
+                self.client.put(
+                    f"/sell/inventory/v1/inventory_item/{variant.sku}",
+                    json_body=payload,
+                )
+                skus_created.append(variant.sku)
+                log.info(f"Step 1 完成: variant sku={variant.sku}")
+            except EbayApiError as exc:
+                log.error(f"Step 1 失败 sku={variant.sku}: {exc}")
+                errors.append(f"inventory_item({variant.sku}): {exc}")
+                # 回滚已创建的
+                self._rollback_inventory_items(skus_created)
+                return ls.VariantListingCreateResponse(
+                    success=False,
+                    errors=errors,
+                )
+
+        # ── Step 2: 创建 InventoryItemGroup ───────────────
+        try:
+            group_payload = self._build_inventory_item_group_payload(req)
+            group_resp = self.client.post(
+                "/sell/inventory/v1/inventory_item_group",
+                json_body=group_payload,
+            )
+            group_id = group_resp.get("groupId")
+            log.info(f"Step 2 完成: group_id={group_id}")
+        except EbayApiError as exc:
+            log.error(f"Step 2 失败 (InventoryItemGroup): {exc}")
+            errors.append(f"inventory_item_group: {exc}")
+            self._rollback_inventory_items(skus_created)
+            return ls.VariantListingCreateResponse(success=False, errors=errors)
+
+        # ── Step 3: 为每个变体创建 Offer ───────────────────
+        offer_ids: list[str | None] = []
+        for variant in req.variants:
+            try:
+                offer_id = self._create_variant_offer(variant, req)
+                offer_ids.append(offer_id)
+                variants_created.append({
+                    "sku": variant.sku,
+                    "offer_id": offer_id,
+                    "status": "OFFER_CREATED",
+                })
+                log.info(f"Step 3 完成: variant sku={variant.sku}, offer_id={offer_id}")
+            except EbayApiError as exc:
+                log.error(f"Step 3 失败 sku={variant.sku}: {exc}")
+                errors.append(f"create_offer({variant.sku}): {exc}")
+                offer_ids.append(None)
+
+        # ── Step 4: 发布所有 Offer ─────────────────────────
+        for i, variant in enumerate(req.variants):
+            offer_id = offer_ids[i]
+            if offer_id is None:
+                variants_created[i]["status"] = "OFFER_CREATE_FAILED"
+                continue
+            try:
+                listing_id = self._publish_variant_offer(offer_id)
+                variants_created[i]["listing_id"] = listing_id
+                variants_created[i]["status"] = "ACTIVE"
+                log.info(f"Step 4 完成: offer_id={offer_id}, listing_id={listing_id}")
+            except EbayApiError as exc:
+                log.error(f"Step 4 失败 offer_id={offer_id}: {exc}")
+                errors.append(f"publish_offer({variant.sku}): {exc}")
+                variants_created[i]["status"] = "PUBLISH_FAILED"
+
+        # ── Step 5: DB 写入 + 事件发布 ──────────────────────
+        try:
+            self._save_variant_records(req, variants_created, group_id)
+        except Exception as exc:
+            log.error(f"DB 写入失败: {exc}")
+            errors.append(f"db_write: {exc}")
+
+        try:
+            self._event_bus.publish(
+                "LISTING_CREATED",
+                payload={
+                    "group_id": group_id,
+                    "variant_count": len(req.variants),
+                    "skus": [v.sku for v in req.variants],
+                    "type": "variant",
+                },
+            )
+        except Exception as exc:
+            log.warning(f"事件发布失败（非阻塞）: {exc}")
+
+        return ls.VariantListingCreateResponse(
+            success=len(errors) == 0,
+            group_id=group_id,
+            variants=variants_created,
+            errors=errors,
+        )
+
+    def _build_variant_inventory_payload(
+        self, variant: VariantItem, req: InventoryItemGroupRequest
+    ) -> dict:
+        """为单个变体构建 createOrReplaceInventoryItem payload"""
+        specifics = [{"name": s.name, "value": s.value} for s in variant.variant_specifics]
+        return build_variant_payload(
+            sku=variant.sku,
+            price=variant.price,
+            quantity=variant.quantity,
+            condition=variant.condition,
+            variant_specifics=specifics,
+            image_urls=variant.image_urls or req.image_urls,
+            currency=req.currency,
+        )
+
+    def _build_inventory_item_group_payload(
+        self, req: InventoryItemGroupRequest
+    ) -> dict:
+        """构建 InventoryItemGroup 请求体"""
+
+        body = {
+            "group_title": req.group_title,
+            "group_description": req.group_description,
+            "brand": req.brand,
+            "category_id": req.category_id,
+            "condition": req.condition,
+            "image_urls": req.image_urls,
+            "variants": [
+                {
+                    "variant_specifics": [
+                        {"name": s.name, "value": s.value}
+                        for s in v.variant_specifics
+                    ]
+                }
+                for v in req.variants
+            ],
+        }
+        return build_inventory_item_group(body)
+
+    def _create_variant_offer(
+        self, variant: VariantItem, req: InventoryItemGroupRequest
+    ) -> str:
+        """为单个变体创建 Offer"""
+        from modules.listing.utils import build_offers_pricing_summary
+
+        body: dict[str, Any] = {
+            "sku": variant.sku,
+            "marketplaceId": req.marketplace_id,
+            "format": "FIXED_PRICE",
+            "availableQuantity": variant.quantity,
+            "listingDescription": req.group_description or req.group_title,
+            "pricingSummary": build_offers_pricing_summary(variant.price, req.currency),
+        }
+
+        resp = self.client.post("/sell/inventory/v1/offer", json_body=body)
+        offer_id = resp.get("offerId")
+        if not offer_id:
+            raise ListingCreateError("createVariantOffer", f"响应中无 offerId: {resp}", {})
+        return offer_id
+
+    def _publish_variant_offer(self, offer_id: str) -> str:
+        """发布单个变体 Offer"""
+        resp = self.client.post(f"/sell/inventory/v1/offer/{offer_id}/publish", json_body={})
+        listing_id = resp.get("listingId")
+        if not listing_id:
+            raise ListingCreateError("publishVariantOffer", f"响应中无 listingId: {resp}", {})
+        return listing_id
+
+    def _rollback_inventory_items(self, skus: list[str]) -> None:
+        """回滚：删除已创建的 inventory items"""
+        for sku in skus:
+            try:
+                self.client.delete(f"/sell/inventory/v1/inventory_item/{sku}")
+                log.info(f"Rollback: 已删除 inventory_item/{sku}")
+            except Exception as exc:
+                log.warning(f"Rollback 失败 sku={sku}: {exc}")
+
+    def _save_variant_records(
+        self,
+        req: InventoryItemGroupRequest,
+        variants: list[dict],
+        group_id: str | None,
+    ) -> None:
+        """写入所有变体的 EbayListing + Product 记录"""
+        with get_session() as s:
+            for i, variant in enumerate(req.variants):
+                info = variants[i]
+                listing = EbayListing(
+                    ebay_item_id=info.get("listing_id") or f"group-{group_id}-{variant.sku}",
+                    sku=variant.sku,
+                    title=req.group_title,
+                    listing_price=variant.price,
+                    quantity_available=variant.quantity,
+                    status=ListingStatus.ACTIVE if info.get("status") == "ACTIVE" else ListingStatus.DRAFT,
+                )
+                s.add(listing)
+
+                product = s.query(Product).filter_by(sku=variant.sku).first()
+                if not product:
+                    product = Product(
+                        sku=variant.sku,
+                        title=req.group_title or variant.sku,
+                        cost_price=0.0,
+                        cost_currency="USD",
+                        status="active",
+                    )
+                    s.add(product)
+
+            s.commit()
+
+    # ── 图片上传 / 校验 ──────────────────────────────────
+
+    def validate_images(self, paths: list[str]) -> ImageUploadResponse:
+        """
+        校验图片（本地文件或 URL）。
+        不上传到 eBay，只校验格式/大小，返回可提交给 eBay 的 URL 列表。
+        eBay Inventory API 接受外部 URL，无需中转上传。
+        """
+
+        valid_urls, raw_results = validate_image_files(paths)
+
+        results = [
+            ls.ImageValidationResult(
+                path=r["path"],
+                valid=r["valid"],
+                error=r.get("error"),
+                size_bytes=r.get("size_bytes"),
+                format=r.get("format"),
+            )
+            for r in raw_results
+        ]
+
+        return ls.ImageUploadResponse(
+            total=len(paths),
+            valid_count=sum(1 for r in results if r.valid),
+            invalid_count=sum(1 for r in results if not r.valid),
+            accepted_urls=valid_urls,
+            results=results,
+        )
