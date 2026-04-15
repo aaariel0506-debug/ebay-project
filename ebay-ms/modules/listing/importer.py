@@ -205,7 +205,6 @@ class ListingImporter:
             "variant_sku", "variant_specifics", "is_parent",
         ]
         sample_rows = [
-            headers,
             ["SKU001", "商品标题示例", "商品描述", "257777", "NEW", "全新未拆封",
              "3500", "10", "https://example.com/img1.jpg,https://example.com/img2.jpg",
              "", "", "", "", "", "", "FALSE"],
@@ -349,9 +348,9 @@ class ListingImporter:
             condition=first.condition or "NEW",
             image_urls=self._parse_image_urls(first.image_urls),
             variants=variants,
-            fulfillment_policy_id=first.fulfillment_policy_id or "",
-            return_policy_id=first.return_policy_id or "",
-            payment_policy_id=first.payment_policy_id or "",
+            fulfillment_policy_id=first.fulfillment_policy_id or None,
+            return_policy_id=first.return_policy_id or None,
+            payment_policy_id=first.payment_policy_id or None,
             template_id=first.template_id,
         )
 

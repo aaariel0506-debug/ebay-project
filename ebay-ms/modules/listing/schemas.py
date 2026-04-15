@@ -150,6 +150,9 @@ class InventoryItemGroupRequest(BaseModel):
     variants: list[VariantItem] = Field(min_length=2, description="至少 2 个变体")
     marketplace_id: str = "EBAY_US"
     currency: str = "USD"
+    fulfillment_policy_id: str | None = None
+    return_policy_id: str | None = None
+    payment_policy_id: str | None = None
 
 
 class VariantListingCreateResponse(BaseModel):
