@@ -452,12 +452,15 @@ class ListingService:
             "listingDescription": req.group_description or req.group_title,
             "pricingSummary": build_offers_pricing_summary(variant.price, req.currency),
         }
+        policies: dict[str, str] = {}
         if req.fulfillment_policy_id:
-            body["fulfillmentPolicyId"] = req.fulfillment_policy_id
+            policies["fulfillmentPolicyId"] = req.fulfillment_policy_id
         if req.return_policy_id:
-            body["returnPolicyId"] = req.return_policy_id
+            policies["returnPolicyId"] = req.return_policy_id
         if req.payment_policy_id:
-            body["paymentPolicyId"] = req.payment_policy_id
+            policies["paymentPolicyId"] = req.payment_policy_id
+        if policies:
+            body["listingPolicies"] = policies
 
         resp = self.client.post("/sell/inventory/v1/offer", json_body=body)
         offer_id = resp.get("offerId")
