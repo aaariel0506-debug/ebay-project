@@ -116,11 +116,6 @@ def _cmd_price_check(args) -> int:
         # 单个 SKU
         from decimal import Decimal
         try:
-            alert = pm.update_cost_price(
-                sku=args.sku,
-                new_price=Decimal("0"),  # 占位，下方 interactive 读取
-            )
-            # 提示用户输入新价格
             new_price_str = input(f"请输入 {args.sku} 的新进货价（JPY）: ").strip()
             alert = pm.update_cost_price(
                 sku=args.sku,
@@ -196,7 +191,7 @@ def _cmd_margin_check(args) -> int:
             EbayListing.quantity_available > 0,
         ).all()
 
-    min_margin = getattr(args, 'min_margin', 0.15)
+    min_margin = getattr(args, 'threshold', 0.15)
     print(f"\n利润率低于 {min_margin:.1%} 的商品:")
     print(f"{'SKU':<20} {'售价':>8} {'成本':>8} {'利润率':>8}")
     print("-" * 50)

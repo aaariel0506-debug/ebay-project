@@ -21,13 +21,6 @@ if TYPE_CHECKING:
     from core.models.product import Product
 
 
-class PriceChangeDirection(str):
-    """价格变化方向枚举。"""
-    UP = "up"
-    DOWN = "down"
-    UNCHANGED = "unchanged"
-
-
 class SupplierPriceHistory(Base, TimestampMixin):
     """
     供应商价格历史记录表。
