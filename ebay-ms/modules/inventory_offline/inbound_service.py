@@ -369,10 +369,137 @@ class InboundService:
             log.info(f"取消入库单 {receipt.receipt_no}")
             return {"receipt_no": receipt.receipt_no, "status": "cancelled"}
 
+    def get_stock(self, sku: str) -> dict:
+        """
+        查询指定 SKU 的当前库存。
+
+        Returns:
+            dict，含 keys: sku, available_quantity, location_breakdown, last_movement_at
+        """
+        from sqlalchemy import func
+
+        with self._get_session() as sess:
+            # 汇总各类 Inventory 变动
+            result = sess.query(
+                self._Inventory.type,
+                func.sum(self._Inventory.quantity).label("total"),
+            ).filter(
+                self._Inventory.sku == sku
+            ).group_by(
+                self._Inventory.type
+            ).all()
+
+            totals: dict[str, int] = {}
+            for inv_type, total in result:
+                totals[inv_type.value] = int(total or 0)
+
+            inbound = totals.get("in", 0)
+            outbound = totals.get("out", 0)
+            adjust = totals.get("adjust", 0)
+            ret = totals.get("return", 0)
+            available = inbound - outbound + adjust + ret
+
+            # 按库位分布
+            loc_rows = sess.query(
+                self._Inventory.location,
+                func.sum(self._Inventory.quantity).label("qty"),
+            ).filter(
+                self._Inventory.sku == sku,
+                self._Inventory.location.isnot(None),
+            ).group_by(
+                self._Inventory.location
+            ).all()
+
+            # 最近变动时间
+            last_row = sess.query(
+                self._Inventory.occurred_at
+            ).filter(
+                self._Inventory.sku == sku
+            ).order_by(
+                self._Inventory.occurred_at.desc()
+            ).first()
+
+            return {
+                "sku": sku,
+                "available_quantity": available,
+                "total_in": inbound,
+                "total_out": outbound,
+                "total_adjust": adjust,
+                "total_return": ret,
+                "location_breakdown": {
+                    row.location: int(row.qty) for row in loc_rows if row.qty
+                },
+                "last_movement_at": last_row.occurred_at if last_row else None,
+            }
+
+    def get_all_stock(self, limit: int = 200) -> list[dict]:
+        """
+        返回所有 SKU 的当前库存快照（按 available_quantity 倒序）。
+
+        Args:
+            limit: 最多返回 SKU 数，默认 200
+        """
+        from sqlalchemy import case, func
+
+        with self._get_session() as sess:
+            # 子查询：每个 SKU 的各类汇总
+            subq = sess.query(
+                self._Inventory.sku,
+                func.sum(
+                    case(
+                        (self._Inventory.type == self._InventoryType.IN, self._Inventory.quantity),
+                        (self._Inventory.type == self._InventoryType.RETURN, self._Inventory.quantity),
+                        else_=0,
+                    )
+                ).label("total_in"),
+                func.sum(
+                    case(
+                        (self._Inventory.type == self._InventoryType.OUT, self._Inventory.quantity),
+                        else_=0,
+                    )
+                ).label("total_out"),
+                func.sum(
+                    case(
+                        (self._Inventory.type == self._InventoryType.ADJUST, self._Inventory.quantity),
+                        else_=0,
+                    )
+                ).label("total_adjust"),
+            ).group_by(
+                self._Inventory.sku
+            ).subquery()
+
+            rows = sess.query(
+                self._Product.sku,
+                self._Product.title,
+                subq.c.total_in,
+                subq.c.total_out,
+                subq.c.total_adjust,
+            ).outerjoin(
+                subq, self._Product.sku == subq.c.sku
+            ).filter(
+                self._Product.status != "discontinued"
+            ).limit(limit).all()
+
+            return [
+                {
+                    "sku": r.sku,
+                    "title": r.title,
+                    "available_quantity": max(
+                        int((r.total_in or 0) - (r.total_out or 0) + (r.total_adjust or 0)),
+                        0,
+                    ),
+                    "total_in": int(r.total_in or 0),
+                    "total_out": int(r.total_out or 0),
+                    "total_adjust": int(r.total_adjust or 0),
+                }
+                for r in rows
+            ]
+
+
+
     def _generate_receipt_no(self) -> str:
         """生成入库单号：IN-YYYY-MM-DD-NNN"""
-        from datetime import date
-        today = date.today().isoformat()
         import random
+        today = datetime.today().date().isoformat()
         seq = random.randint(1, 999)
         return f"IN-{today}-{seq:03d}"
