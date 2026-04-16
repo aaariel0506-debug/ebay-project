@@ -497,10 +497,16 @@ class InboundService:
             for r in rows:
                 sku = r.sku
 
-                # 位置分布
+                # 位置分布 — 按 type 区分符号（OUT/ADJUST 取负）
+                from sqlalchemy import case
+                qty_expr = case(
+                    (self._Inventory.type == self._InventoryType.OUT, -self._Inventory.quantity),
+                    (self._Inventory.type == self._InventoryType.ADJUST, -self._Inventory.quantity),
+                    else_=self._Inventory.quantity,
+                )
                 loc_rows = sess.query(
                     self._Inventory.location,
-                    func.sum(self._Inventory.quantity).label("qty"),
+                    func.sum(qty_expr).label("qty"),
                 ).filter(
                     self._Inventory.sku == sku,
                     self._Inventory.location.isnot(None),
