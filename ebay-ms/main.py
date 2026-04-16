@@ -15,7 +15,17 @@ import argparse
 import sys
 
 
+def _register_event_handlers() -> None:
+    """进程启动时注册所有事件处理器（幂等）"""
+    from core.events.bus import get_event_bus
+    from modules.inventory_online.event_handlers import handle_stock_out
+
+    bus = get_event_bus()
+    bus.subscribe("STOCK_OUT", handle_stock_out)
+
+
 def run() -> int:
+    _register_event_handlers()
     parser = argparse.ArgumentParser(
         prog="main.py",
         description="eBay Management System",

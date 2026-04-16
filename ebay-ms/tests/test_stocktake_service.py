@@ -153,6 +153,11 @@ class TestFinishStocktake:
         assert result.adjustment_records == 1
         assert result.total_difference == -2  # 盘亏 2 件
 
+        # 验证 get_stock 反映了 ADJUST 后的实际库存
+        from modules.inventory_offline import InboundService
+        stock_svc = InboundService()
+        stock = stock_svc.get_stock(sample_product.sku)
+        assert stock["available_quantity"] == 8, f"expected 8, got {stock['available_quantity']}"
     def test_finish_stocktake_no_difference(self, sample_product, db_session):
         """无差异时不生成 ADJUST 记录。"""
         from core.models import Inventory, InventoryType

@@ -64,16 +64,16 @@ class EventBus:
             )
             s.add(record)
             s.commit()
-            record_id = record.id
+            event_id = record.id
 
-        log.debug(f"Published event {event_type} (id={record_id})")
+        log.debug(f"Published event {event_type} (id={event_id})")
 
         # 同步分发 handler（捕获异常，不向上扩散）
-        self._dispatch(record_id, event_type, payload)
+        self._dispatch(event_id, event_type, payload)
 
         # 重新获取以返回最新状态
         with get_session() as s:
-            record = s.get(EventLog, record_id)
+            record = s.get(EventLog, event_id)
 
         return record
 
