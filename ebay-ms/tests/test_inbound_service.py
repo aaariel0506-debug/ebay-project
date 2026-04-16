@@ -372,3 +372,42 @@ class TestOutbound:
         assert len(all_rows) == 3
         assert len(order_a) == 2
         assert all(r["related_order"] == "A" for r in order_a)
+
+
+class TestGetAllStock:
+    """Test get_all_stock() method."""
+
+    def test_get_all_stock_with_negative_adjust(self, db_session, sample_product):
+        """验证 locations 总和 == available_quantity（含负数 ADJUST）"""
+        from core.models import Inventory, InventoryType
+        from modules.inventory_offline import InboundService
+
+        # 创建测试数据：IN 10, OUT 3, RETURN 1, ADJUST -1 → available = 7
+        for inv_type, qty in [
+            (InventoryType.IN, 10),
+            (InventoryType.OUT, 3),
+            (InventoryType.RETURN, 1),
+            (InventoryType.ADJUST, -1),
+        ]:
+            inv = Inventory(
+                sku=sample_product.sku,
+                type=inv_type,
+                quantity=qty,
+                location="A-1",
+                operator="test",
+            )
+            db_session.add(inv)
+        db_session.commit()
+
+        svc = InboundService()
+        all_stock = svc.get_all_stock()
+        item = next(i for i in all_stock if i["sku"] == sample_product.sku)
+
+        # 可用数量 = 10 - 3 + 1 + (-1) = 7
+        assert item["available_quantity"] == 7, f"expected 7, got {item['available_quantity']}"
+        # A-1 位置 = 10 - 3 + 1 + (-1) = 7
+        assert item["locations"].get("A-1") == 7, f"expected A-1:7, got {item['locations']}"
+        # 守恒：sum(locations) == available_quantity
+        assert sum(item["locations"].values()) == item["available_quantity"], (
+            f"locations sum {sum(item['locations'].values())} != available {item['available_quantity']}"
+        )
