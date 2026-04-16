@@ -480,10 +480,53 @@ class InboundService:
                 self._Product.status != "discontinued"
             ).limit(limit).all()
 
-            return [
-                {
-                    "sku": r.sku,
+            rows = sess.query(
+                self._Product.sku,
+                self._Product.title,
+                self._Product.cost_price,
+                subq.c.total_in,
+                subq.c.total_out,
+                subq.c.total_adjust,
+            ).outerjoin(
+                subq, self._Product.sku == subq.c.sku
+            ).filter(
+                self._Product.status != "discontinued"
+            ).limit(limit).all()
+
+            result = []
+            for r in rows:
+                sku = r.sku
+
+                # 位置分布
+                loc_rows = sess.query(
+                    self._Inventory.location,
+                    func.sum(self._Inventory.quantity).label("qty"),
+                ).filter(
+                    self._Inventory.sku == sku,
+                    self._Inventory.location.isnot(None),
+                ).group_by(
+                    self._Inventory.location
+                ).all()
+                locations = {loc: int(qty) for loc, qty in loc_rows if qty and qty > 0}
+
+                # 最后入库 / 出库时间
+                last_in = sess.query(
+                    func.max(self._Inventory.occurred_at)
+                ).filter(
+                    self._Inventory.sku == sku,
+                    self._Inventory.type == self._InventoryType.IN,
+                ).scalar()
+                last_out = sess.query(
+                    func.max(self._Inventory.occurred_at)
+                ).filter(
+                    self._Inventory.sku == sku,
+                    self._Inventory.type == self._InventoryType.OUT,
+                ).scalar()
+
+                result.append({
+                    "sku": sku,
                     "title": r.title,
+                    "cost_price": r.cost_price,
                     "available_quantity": max(
                         int((r.total_in or 0) - (r.total_out or 0) + (r.total_adjust or 0)),
                         0,
@@ -491,9 +534,17 @@ class InboundService:
                     "total_in": int(r.total_in or 0),
                     "total_out": int(r.total_out or 0),
                     "total_adjust": int(r.total_adjust or 0),
-                }
-                for r in rows
-            ]
+                    "locations": locations,
+                    "last_inbound_at": last_in,
+                    "last_outbound_at": last_out,
+                })
+
+            # 按库存金额降序（cost_price * available_quantity）
+            result.sort(
+                key=lambda x: float(x["cost_price"] or 0) * x["available_quantity"],
+                reverse=True,
+            )
+            return result[:limit]
 
 
 

@@ -167,8 +167,9 @@ def run() -> int:
     p_stk_finish.add_argument("--id", required=True, type=int, dest="stocktake_id")
 
     p_stk_list = inv_offline_sub.add_parser("stocktake-list", help="列出现有盘点单")
-    p_stk_list.add_argument("--status")
+    p_stk_list.add_argument("--status", choices=["in_progress", "finished", "cancelled"])
     p_stk_list.add_argument("--limit", type=int, default=50)
+    inv_offline_sub.add_parser("report", help="导出库存报表（快照 / 出入库明细）")
 
     args = parser.parse_args()
 

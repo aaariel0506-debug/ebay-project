@@ -96,6 +96,19 @@ def run_inventory_offline_cmd(argv: list[str]) -> int:
     p_stk_list.add_argument("--status", choices=["in_progress", "finished", "cancelled"])
     p_stk_list.add_argument("--limit", type=int, default=50)
 
+    # report：库存报表
+    p_report = sub.add_parser("report", help="导出库存报表（快照 / 出入库明细）")
+    p_report.add_argument("--type", choices=["snapshot", "movements", "both"], default="both",
+        help="报表类型：snapshot=快照，movements=明细，both=两者（默认 both）")
+    p_report.add_argument("--output", "-o", type=Path, default=Path("inventory_report.xlsx"),
+        help="输出文件路径（默认 inventory_report.xlsx）")
+    p_report.add_argument("--start-date", dest="start_date",
+        help="起始日期（YYYY-MM-DD），用于 movements 报表")
+    p_report.add_argument("--end-date", dest="end_date",
+        help="结束日期（YYYY-MM-DD），用于 movements 报表")
+    p_report.add_argument("--sku",
+        help="只导出指定 SKU 的报表")
+
     args = parser.parse_args(argv)
 
     # ── 路由 ───────────────────────────────────────
@@ -126,6 +139,8 @@ def run_inventory_offline_cmd(argv: list[str]) -> int:
         return _cmd_stocktake_finish(args)
     if args.cmd == "stocktake-list":
         return _cmd_stocktake_list(args)
+    if args.cmd == "report":
+        return _cmd_report(args)
 
     parser.print_help()
     return 0
@@ -411,3 +426,62 @@ def _cmd_stocktake_list(args) -> int:
 
 if __name__ == "__main__":
     sys.exit(run_inventory_offline_cmd(sys.argv[1:]))
+
+
+def _cmd_report(args) -> int:
+    from datetime import datetime
+
+    from modules.inventory_offline.reporter import InventoryReporter
+
+    reporter = InventoryReporter()
+
+    start = datetime.fromisoformat(args.start_date) if args.start_date else None
+    end = datetime.fromisoformat(args.end_date) if args.end_date else None
+    sku = args.sku or None
+    output = args.output or Path("inventory_report.xlsx")
+
+    report_type = args.type or "both"
+
+    print(f"\n{'='*50}")
+    print("库存报表生成中...")
+    print(f"{'='*50}")
+
+    if report_type in ("snapshot", "both"):
+        print("\n📊 导出库存快照...")
+        snap_path = output if report_type == "snapshot" else output
+        reporter.export_snapshot_to_excel(snap_path)
+        print(f"✅ 快照已保存：{snap_path}")
+
+        # 控制台摘要
+        items = reporter.get_stock_snapshot()
+        total_value = sum(i.inventory_value for i in items)
+        total_qty = sum(i.available_quantity for i in items)
+        print(f"\n当前库存概览（{len(items)} 个 SKU）：")
+        print(f"  总库存件数：{total_qty:,}")
+        print(f"  总库存金额：¥{float(total_value):,.0f}")
+
+    if report_type in ("movements", "both"):
+        print("\n📋 导出出入库明细...")
+        mov_path = output.parent / f"movements_{output.name}" if report_type == "both" else output
+        reporter.export_movements_to_excel(
+            path=mov_path,
+            start_date=start,
+            end_date=end,
+            sku=sku,
+        )
+        print(f"✅ 明细已保存：{mov_path}")
+
+        # 控制台摘要
+        movements = reporter.get_movements(
+            start_date=start,
+            end_date=end,
+            sku=sku,
+            limit=100,
+        )
+        total_in = sum(m.quantity for m in movements if m.movement_type == "IN")
+        total_out = sum(abs(m.quantity) for m in movements if m.movement_type == "OUT")
+        print(f"\n出入库汇总（{len(movements)} 条记录）：")
+        print(f"  入库合计：{total_in:,} 件")
+        print(f"  出库合计：{total_out:,} 件")
+
+    return 0
