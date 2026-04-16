@@ -144,7 +144,7 @@ class TestInventoryReporter:
         assert latest.sku == sample_product.sku
 
     def test_export_snapshot_to_excel(self, db_session, sample_product, tmp_path):
-        """库存快照导出 Excel"""
+        """库存快照导出 Excel — 验证表头 + 位置分布 + 进货价"""
         from modules.inventory_offline.reporter import InventoryReporter
 
         self._setup_inventory(db_session, sample_product)
@@ -160,10 +160,30 @@ class TestInventoryReporter:
         wb = openpyxl.load_workbook(out_path)
         ws = wb.active
         assert ws.title == "库存快照"
+
+        # 验证表头
+        assert ws.cell(row=1, column=1).value == "SKU"
+        assert ws.cell(row=1, column=2).value == "商品名称"
+        assert ws.cell(row=1, column=3).value == "可用数量"
+        assert ws.cell(row=1, column=4).value == "位置分布"
+        assert ws.cell(row=1, column=5).value == "进货价"
+        assert ws.cell(row=1, column=6).value == "库存金额 (JPY)"
+        assert ws.cell(row=1, column=7).value == "最后入库"
+        assert ws.cell(row=1, column=8).value == "最后出库"
+
+        # 验证数据行
         assert ws.cell(row=2, column=1).value == sample_product.sku
+        # 位置分布格式："A-1:15" 或类似
+        loc_cell = ws.cell(row=2, column=4).value
+        assert loc_cell is not None
+        assert "A-1" in str(loc_cell)
+        # 进货价是数值
+        cost_cell = ws.cell(row=2, column=5).value
+        assert cost_cell is not None
+        assert isinstance(cost_cell, (int, float))
 
     def test_export_movements_to_excel(self, db_session, sample_product, tmp_path):
-        """出入库明细导出 Excel"""
+        """出入库明细导出 Excel — 验证颜色编码"""
         from modules.inventory_offline.reporter import InventoryReporter
 
         self._setup_inventory(db_session, sample_product)
@@ -180,3 +200,19 @@ class TestInventoryReporter:
         ws = wb.active
         assert ws.title == "出入库明细"
         assert ws.max_row == 4  # 3 条数据 + 1 表头
+
+        # 验证颜色编码 (按时间倒序：RETURN/OUT/IN)
+        # RETURN (row 2) - 蓝色 DDEBF7
+        return_cell = ws.cell(row=2, column=1)
+        return_color = return_cell.fill.fgColor.rgb
+        assert return_color.endswith("DDEBF7"), f"RETURN should be blue, got {return_color}"
+
+        # OUT (row 3) - 红色 FFCCCC
+        out_cell = ws.cell(row=3, column=1)
+        out_color = out_cell.fill.fgColor.rgb
+        assert out_color.endswith("FFCCCC"), f"OUT should be red, got {out_color}"
+
+        # IN (row 4) - 绿色 C6EFCE
+        in_cell = ws.cell(row=4, column=1)
+        in_color = in_cell.fill.fgColor.rgb
+        assert in_color.endswith("C6EFCE"), f"IN should be green, got {in_color}"

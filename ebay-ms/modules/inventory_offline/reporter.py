@@ -248,7 +248,7 @@ class InventoryReporter:
 
         items = self.get_stock_snapshot()
 
-        headers = ["SKU", "商品名称", "可用数量", "库存金额(JPY)", "最后入库", "最后出库"]
+        headers = ["SKU", "商品名称", "可用数量", "位置分布", "进货价", "库存金额 (JPY)", "最后入库", "最后出库"]
         header_fill = PatternFill("solid", fgColor="4472C4")
         header_font = Font(bold=True, color="FFFFFF")
 
