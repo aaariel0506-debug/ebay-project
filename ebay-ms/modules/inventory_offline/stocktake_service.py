@@ -52,7 +52,7 @@ class StocktakeService:
             StocktakeItem,
             StocktakeStatus,
         )
-        from modules.inventory_offline.inbound_service import InboundService
+        from modules.inventory_offline.offline_inventory_service import OfflineInventoryService
 
         self._get_session = get_session
         self._Inventory = Inventory
@@ -61,7 +61,7 @@ class StocktakeService:
         self._Stocktake = Stocktake
         self._StocktakeItem = StocktakeItem
         self._StocktakeStatus = StocktakeStatus
-        self._InboundService = InboundService
+        self._OfflineInventoryService = OfflineInventoryService
         self._EventBus = EventBus
 
     def start_stocktake(
@@ -106,7 +106,7 @@ class StocktakeService:
                 ).all()
 
             # 查询每个 SKU 的系统可用库存，写入盘点明细
-            offline_svc = self._InboundService()
+            offline_svc = self._OfflineInventoryService()
             items_created = 0
             for prod in products:
                 # 获取当前系统可用库存

@@ -65,8 +65,8 @@ class InventoryReporter:
     """库存报表生成器。"""
 
     def __init__(self):
-        from modules.inventory_offline import InboundService
-        self._svc = InboundService()
+        from modules.inventory_offline import OfflineInventoryService
+        self._svc = OfflineInventoryService()
 
     # ── 当前库存快照 ───────────────────────────────────────────────
 

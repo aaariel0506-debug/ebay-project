@@ -53,9 +53,9 @@ class ConsistencyChecker:
     """线上 eBay 库存 vs 线下实体库存一致性检测。"""
 
     def __init__(self):
-        from modules.inventory_offline import InboundService
+        from modules.inventory_offline import OfflineInventoryService
 
-        self._offline_svc = InboundService()
+        self._offline_svc = OfflineInventoryService()
 
     def check(self, sku: str | None = None) -> ConsistencyReport:
         """

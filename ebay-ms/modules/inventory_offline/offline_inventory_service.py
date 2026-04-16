@@ -57,7 +57,7 @@ class ConfirmResult:
     inventory_records: int
 
 
-class InboundService:
+class OfflineInventoryService:
     """入库单服务。"""
 
     def __init__(self):
@@ -467,18 +467,6 @@ class InboundService:
             ).group_by(
                 self._Inventory.sku
             ).subquery()
-
-            rows = sess.query(
-                self._Product.sku,
-                self._Product.title,
-                subq.c.total_in,
-                subq.c.total_out,
-                subq.c.total_adjust,
-            ).outerjoin(
-                subq, self._Product.sku == subq.c.sku
-            ).filter(
-                self._Product.status != "discontinued"
-            ).limit(limit).all()
 
             rows = sess.query(
                 self._Product.sku,

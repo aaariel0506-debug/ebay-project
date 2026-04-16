@@ -1,5 +1,5 @@
 """
-tests/test_inbound_service.py
+tests/test_offline_inventory_service.py
 
 Day 19: 入库功能测试
 """
@@ -7,9 +7,9 @@ Day 19: 入库功能测试
 from decimal import Decimal
 
 import pytest
-from modules.inventory_offline.inbound_service import (
+from modules.inventory_offline.offline_inventory_service import (
     InboundItemInput,
-    InboundService,
+    OfflineInventoryService,
     ReceivedItemInput,
 )
 
@@ -19,7 +19,7 @@ class TestCreateReceipt:
 
     def test_create_receipt_generates_receipt_no(self, sample_product):
         """不传 receipt_no 时自动生成 IN-YYYY-MM-DD-NNN 格式。"""
-        svc = InboundService()
+        svc = OfflineInventoryService()
         result = svc.create_receipt(
             supplier="Test Supplier",
             items=[InboundItemInput(sku="TEST-SKU-001", expected_quantity=10, cost_price=Decimal("100"))],
@@ -30,7 +30,7 @@ class TestCreateReceipt:
 
     def test_create_receipt_with_custom_receipt_no(self, sample_product):
         """传入 receipt_no 时使用指定值。"""
-        svc = InboundService()
+        svc = OfflineInventoryService()
         result = svc.create_receipt(
             receipt_no="IN-2026-04-16-TEST",
             supplier="Test Supplier",
@@ -40,13 +40,13 @@ class TestCreateReceipt:
 
     def test_create_receipt_empty_items_raises(self):
         """物品列表为空时抛出 ValueError。"""
-        svc = InboundService()
+        svc = OfflineInventoryService()
         with pytest.raises(ValueError, match="物品列表不能为空"):
             svc.create_receipt(supplier="Test", items=[])
 
     def test_create_receipt_nonexistent_sku_raises(self):
         """SKU 不存在时抛出 ValueError。"""
-        svc = InboundService()
+        svc = OfflineInventoryService()
         with pytest.raises(ValueError, match="SKU 不存在"):
             svc.create_receipt(
                 supplier="Test",
@@ -80,7 +80,7 @@ class TestConfirmInbound:
         db_session.add(item)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         result = svc.confirm_inbound(
             receipt_id=receipt.id,
             received_items=[ReceivedItemInput(sku=sample_product.sku, received_quantity=6)],
@@ -114,7 +114,7 @@ class TestConfirmInbound:
         db_session.add(item)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         result = svc.confirm_inbound(
             receipt_id=receipt.id,
             received_items=[ReceivedItemInput(sku=sample_product.sku, received_quantity=10)],
@@ -146,7 +146,7 @@ class TestConfirmInbound:
         db_session.add(item)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         result = svc.confirm_inbound(
             receipt_id=receipt.id,
             received_items=[ReceivedItemInput(sku=sample_product.sku, received_quantity=8)],
@@ -158,7 +158,7 @@ class TestConfirmInbound:
 
     def test_confirm_inbound_nonexistent_receipt_raises(self):
         """入库单不存在时抛出 ValueError。"""
-        svc = InboundService()
+        svc = OfflineInventoryService()
         with pytest.raises(ValueError, match="入库单不存在"):
             svc.confirm_inbound(
                 receipt_id=99999,
@@ -187,7 +187,7 @@ class TestConfirmInbound:
         db_session.add(item)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         with pytest.raises(ValueError, match="已全部收货"):
             svc.confirm_inbound(
                 receipt_id=receipt.id,
@@ -220,7 +220,7 @@ class TestGetReceipt:
         db_session.add(item)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         result = svc.get_receipt(receipt.id)
 
         assert result["receipt_no"] == "IN-TEST-GET"
@@ -243,7 +243,7 @@ class TestListReceipts:
             db_session.add(r)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         pending = svc.list_receipts(status="pending")
         received = svc.list_receipts(status="received")
 
@@ -266,7 +266,7 @@ class TestCancelReceipt:
         db_session.add(receipt)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         result = svc.cancel_receipt(receipt.id)
 
         assert result["status"] == "cancelled"
@@ -283,7 +283,7 @@ class TestCancelReceipt:
         db_session.add(receipt)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         with pytest.raises(ValueError, match="无法取消"):
             svc.cancel_receipt(receipt.id)
 
@@ -305,7 +305,7 @@ class TestOutbound:
         db_session.add(inv_in)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         result = svc.outbound(
             sku=sample_product.sku,
             quantity=3,
@@ -329,19 +329,19 @@ class TestOutbound:
         db_session.add(inv_in)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         with pytest.raises(ValueError, match="库存不足"):
             svc.outbound(sku=sample_product.sku, quantity=10)
 
     def test_outbound_zero_quantity_raises(self, sample_product):
         """出库数量 <= 0 时抛出 ValueError。"""
-        svc = InboundService()
+        svc = OfflineInventoryService()
         with pytest.raises(ValueError, match="出库数量必须"):
             svc.outbound(sku=sample_product.sku, quantity=0)
 
     def test_return_inventory_success(self, sample_product, db_session):
         """退货入库：创建 RETURN 记录，发布 STOCK_RETURN 事件。"""
-        svc = InboundService()
+        svc = OfflineInventoryService()
         result = svc.return_inventory(
             sku=sample_product.sku,
             quantity=2,
@@ -365,7 +365,7 @@ class TestOutbound:
             db_session.add(inv)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         all_rows = svc.list_outbound(sku=sample_product.sku)
         order_a = svc.list_outbound(related_order="A")
 
@@ -380,7 +380,7 @@ class TestGetAllStock:
     def test_get_all_stock_with_negative_adjust(self, db_session, sample_product):
         """验证 locations 总和 == available_quantity（含负数 ADJUST）"""
         from core.models import Inventory, InventoryType
-        from modules.inventory_offline import InboundService
+        from modules.inventory_offline import OfflineInventoryService
 
         # 创建测试数据：IN 10, OUT 3, RETURN 1, ADJUST -1 → available = 7
         for inv_type, qty in [
@@ -399,7 +399,7 @@ class TestGetAllStock:
             db_session.add(inv)
         db_session.commit()
 
-        svc = InboundService()
+        svc = OfflineInventoryService()
         all_stock = svc.get_all_stock()
         item = next(i for i in all_stock if i["sku"] == sample_product.sku)
 

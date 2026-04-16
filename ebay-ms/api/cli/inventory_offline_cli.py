@@ -151,7 +151,7 @@ def run_inventory_offline_cmd(argv: list[str]) -> int:
 def _cmd_inbound_create(args) -> int:
     import csv
 
-    from modules.inventory_offline import InboundItemInput, InboundService
+    from modules.inventory_offline import InboundItemInput, OfflineInventoryService
 
     rows = []
     with open(args.file, newline="", encoding="utf-8") as f:
@@ -166,7 +166,7 @@ def _cmd_inbound_create(args) -> int:
                 )
             )
 
-    svc = InboundService()
+    svc = OfflineInventoryService()
     result = svc.create_receipt(
         supplier=args.supplier,
         items=rows,
@@ -181,7 +181,7 @@ def _cmd_inbound_create(args) -> int:
 def _cmd_inbound_confirm(args) -> int:
     import csv
 
-    from modules.inventory_offline import InboundService, ReceivedItemInput
+    from modules.inventory_offline import OfflineInventoryService, ReceivedItemInput
 
     rows = []
     with open(args.file, newline="", encoding="utf-8") as f:
@@ -195,7 +195,7 @@ def _cmd_inbound_confirm(args) -> int:
                 )
             )
 
-    svc = InboundService()
+    svc = OfflineInventoryService()
     result = svc.confirm_inbound(
         receipt_id=args.receipt_id,
         received_items=rows,
@@ -212,9 +212,9 @@ def _cmd_inbound_confirm(args) -> int:
 
 
 def _cmd_inbound_list(args) -> int:
-    from modules.inventory_offline import InboundService
+    from modules.inventory_offline import OfflineInventoryService
 
-    svc = InboundService()
+    svc = OfflineInventoryService()
     receipts = svc.list_receipts(status=args.status, supplier=args.supplier, limit=args.limit)
 
     if not receipts:
@@ -233,18 +233,18 @@ def _cmd_inbound_list(args) -> int:
 
 
 def _cmd_inbound_cancel(args) -> int:
-    from modules.inventory_offline import InboundService
+    from modules.inventory_offline import OfflineInventoryService
 
-    svc = InboundService()
+    svc = OfflineInventoryService()
     result = svc.cancel_receipt(receipt_id=args.receipt_id)
     print(f"✅ 取消入库单 {result['receipt_no']}，状态: {result['status']}")
     return 0
 
 
 def _cmd_stock(args) -> int:
-    from modules.inventory_offline import InboundService
+    from modules.inventory_offline import OfflineInventoryService
 
-    svc = InboundService()
+    svc = OfflineInventoryService()
     stock = svc.get_stock(args.sku)
 
     print(f"SKU: {stock['sku']}")
@@ -263,9 +263,9 @@ def _cmd_stock(args) -> int:
 
 
 def _cmd_stock_all(args) -> int:
-    from modules.inventory_offline import InboundService
+    from modules.inventory_offline import OfflineInventoryService
 
-    svc = InboundService()
+    svc = OfflineInventoryService()
     stocks = svc.get_all_stock(limit=args.limit)
 
     print(f"{'SKU':<20}  {'商品名':<30}  {'可用':>6}  {'入库':>6}  {'出库':>6}")
@@ -283,9 +283,9 @@ def _cmd_stock_all(args) -> int:
 
 
 def _cmd_outbound(args) -> int:
-    from modules.inventory_offline import InboundService
+    from modules.inventory_offline import OfflineInventoryService
 
-    svc = InboundService()
+    svc = OfflineInventoryService()
     result = svc.outbound(
         sku=args.sku,
         quantity=args.quantity,
@@ -302,9 +302,9 @@ def _cmd_outbound(args) -> int:
 
 
 def _cmd_return_in(args) -> int:
-    from modules.inventory_offline import InboundService
+    from modules.inventory_offline import OfflineInventoryService
 
-    svc = InboundService()
+    svc = OfflineInventoryService()
     result = svc.return_inventory(
         sku=args.sku,
         quantity=args.quantity,
@@ -319,9 +319,9 @@ def _cmd_return_in(args) -> int:
 def _cmd_outbound_list(args) -> int:
     from datetime import datetime
 
-    from modules.inventory_offline import InboundService
+    from modules.inventory_offline import OfflineInventoryService
 
-    svc = InboundService()
+    svc = OfflineInventoryService()
 
     # 解析日期参数
     start_date = None
