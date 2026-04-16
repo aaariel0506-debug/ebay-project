@@ -262,9 +262,13 @@ class InventoryReporter:
             ws.cell(row=row_idx, column=1, value=item.sku)
             ws.cell(row=row_idx, column=2, value=item.title or "")
             ws.cell(row=row_idx, column=3, value=item.available_quantity)
-            ws.cell(row=row_idx, column=4, value=float(item.inventory_value))
-            ws.cell(row=row_idx, column=5, value=str(item.last_inbound_at or ""))
-            ws.cell(row=row_idx, column=6, value=str(item.last_outbound_at or ""))
+            # 位置分布：格式化为 "A-1:5, B-2:3"
+            loc_str = ", ".join(f"{k}:{v}" for k, v in sorted(item.locations.items()))
+            ws.cell(row=row_idx, column=4, value=loc_str)
+            ws.cell(row=row_idx, column=5, value=float(item.cost_price) if item.cost_price else None)
+            ws.cell(row=row_idx, column=6, value=float(item.inventory_value))
+            ws.cell(row=row_idx, column=7, value=str(item.last_inbound_at or ""))
+            ws.cell(row=row_idx, column=8, value=str(item.last_outbound_at or ""))
 
         total_value = sum(i.inventory_value for i in items)
         total_qty = sum(i.available_quantity for i in items)
@@ -278,9 +282,11 @@ class InventoryReporter:
         ws.column_dimensions["A"].width = 20
         ws.column_dimensions["B"].width = 35
         ws.column_dimensions["C"].width = 12
-        ws.column_dimensions["D"].width = 18
-        ws.column_dimensions["E"].width = 20
-        ws.column_dimensions["F"].width = 20
+        ws.column_dimensions["D"].width = 25
+        ws.column_dimensions["E"].width = 12
+        ws.column_dimensions["F"].width = 18
+        ws.column_dimensions["G"].width = 20
+        ws.column_dimensions["H"].width = 20
 
         wb.save(path)
         log.info(f"库存快照已导出：{path}")
@@ -317,10 +323,10 @@ class InventoryReporter:
             cell.alignment = Alignment(horizontal="center")
 
         type_colors = {
-            "IN": "C6EFCE",
-            "OUT": "FFCCCC",
-            "ADJUST": "FFEB9C",
-            "RETURN": "DDEBF7",
+            "in": "C6EFCE",    # 绿
+            "out": "FFCCCC",   # 红
+            "adjust": "FFEB9C",  # 黄
+            "return": "DDEBF7",  # 蓝
         }
 
         for row_idx, item in enumerate(items, start=2):
