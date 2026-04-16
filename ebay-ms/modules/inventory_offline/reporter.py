@@ -275,9 +275,9 @@ class InventoryReporter:
         summary_row = len(items) + 2
         ws.cell(row=summary_row, column=1, value="合计")
         ws.cell(row=summary_row, column=3, value=total_qty)
-        ws.cell(row=summary_row, column=4, value=float(total_value))
+        ws.cell(row=summary_row, column=6, value=float(total_value))
         ws.cell(row=summary_row, column=3).font = Font(bold=True)
-        ws.cell(row=summary_row, column=4).font = Font(bold=True)
+        ws.cell(row=summary_row, column=6).font = Font(bold=True)
 
         ws.column_dimensions["A"].width = 20
         ws.column_dimensions["B"].width = 35

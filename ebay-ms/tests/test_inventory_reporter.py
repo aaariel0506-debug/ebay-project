@@ -182,6 +182,16 @@ class TestInventoryReporter:
         assert cost_cell is not None
         assert isinstance(cost_cell, (int, float))
 
+        # 验证合计行
+        summary_row = ws.max_row
+        assert ws.cell(row=summary_row, column=1).value == "合计"
+        assert ws.cell(row=summary_row, column=3).value is not None  # 总数量
+        assert ws.cell(row=summary_row, column=6).value is not None  # 总金额
+        assert ws.cell(row=summary_row, column=4).value in (None, "")  # 位置分布列应为空
+        # 合计行字体加粗
+        assert ws.cell(row=summary_row, column=3).font.bold is True
+        assert ws.cell(row=summary_row, column=6).font.bold is True
+
     def test_export_movements_to_excel(self, db_session, sample_product, tmp_path):
         """出入库明细导出 Excel — 验证颜色编码"""
         from modules.inventory_offline.reporter import InventoryReporter
