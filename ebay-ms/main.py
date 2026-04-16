@@ -96,6 +96,7 @@ def run() -> int:
     p_margin.add_argument("--threshold", type=float, default=0.15)
     inv_online_sub.add_parser("restock-advice", help="补货建议")
     p_adj = inv_online_sub.add_parser("adjust", help="调整 eBay 库存")
+    inv_online_sub.add_parser("check-consistency", help="检测线上线下库存一致性")
     p_adj.add_argument("--sku", help="SKU")
     p_adj.add_argument("--quantity", type=int, help="新库存数量")
     p_adj.add_argument("--file", type=str, help="CSV 文件路径（批量）")
