@@ -87,6 +87,13 @@ def run_inventory_online_cmd(argv: list[str]) -> int:
         help="仅打印，不实际调整",
     )
 
+    # check-consistency：库存一致性检测
+    p_consistency = sub.add_parser(
+        "check-consistency",
+        help="检测线上 eBay 库存与线下实体库存的一致性",
+    )
+    p_consistency.add_argument("--sku", help="可选：只检查指定 SKU")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "price-check":
@@ -99,6 +106,8 @@ def run_inventory_online_cmd(argv: list[str]) -> int:
         return _cmd_restock_advice(args)
     elif args.cmd == "adjust":
         return _cmd_adjust(args)
+    elif args.cmd == "check-consistency":
+        return _cmd_check_consistency(args)
     else:
         parser.print_help()
         return 0
@@ -270,3 +279,20 @@ def _print_alert(alert) -> None:
     if alert.new_margin is not None:
         print(f"  新利润率: {alert.new_margin:.1%}")
     print(f"  建议: {alert.suggested_action}")
+
+
+def _cmd_check_consistency(args) -> int:
+    from modules.inventory_online.consistency_checker import ConsistencyChecker
+
+    checker = ConsistencyChecker()
+    report = checker.check(sku=args.sku)
+
+    print(f"\n{'='*50}")
+    print("库存一致性检测报告")
+    print(f"{'='*50}")
+    print(report.summary())
+
+    if not report.all_consistent:
+        print("\n提示：线上线下不一致时请人工确认，避免重复扣减库存。")
+        return 1
+    return 0

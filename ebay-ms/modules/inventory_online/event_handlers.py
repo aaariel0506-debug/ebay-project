@@ -49,8 +49,15 @@ def handle_stock_out(event_type: str, payload: dict) -> None:
         return
 
     # ── 防重复扣减 ──────────────────────────────────────
-    # related_order 记录在 STOCK_OUT 事件 payload 中，
-    # 通过查询 event_log 中是否有同订单的 DONE STOCK_OUT 来去重
+    # related_order 记录在 STOCK_OUT 事件 payload 中。
+    # 通过查询 event_log 中是否有同订单的 DONE STOCK_OUT 来去重。
+    #
+    # 注意：SQLite 不支持 JSON 列的 .astext 查询，
+    # 因此这里取回所有 DONE STOCK_OUT 事件后在 Python 层做 payload 匹配。
+    # 数据量大时效率低（O(N) 扫描）。
+    # 未来优化方案：
+    #   1. 在 EventLog 表加 related_order 独立字段并建索引
+    #   2. 或改用 PostgreSQL 以支持 JSONB 查询
     if related_order:
         with get_session() as sess:
             dup = sess.query(EventLog).filter(
