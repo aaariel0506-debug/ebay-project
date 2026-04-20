@@ -10,6 +10,7 @@ from decimal import Decimal
 from itertools import cycle
 from unittest.mock import MagicMock
 
+import pytest
 from core.models import Order, OrderStatus, Transaction, TransactionType
 from modules.finance.order_sync_service import (
     OrderSyncService,
@@ -346,3 +347,121 @@ class TestOrderSyncService:
         ).first()
         assert order2 is not None
         assert order2.sale_price == Decimal("40.00")
+
+    # ── Day 26.5 重构前锁定的 bug ────────────────────────────────────────
+    @pytest.mark.xfail(
+        reason=(
+            "Day 26.5 待修复:Order 单 PK(ebay_order_id)导致多 SKU 订单"
+            "的 line_items 互相覆盖。重构(OrderItem 子表 或 复合 PK)完成后,"
+            "请(1) 确保本测试通过,必要时微调断言匹配新 schema,"
+            "(2) 移除本 xfail 标记。strict=True 会在意外 pass 时报错提醒。"
+        ),
+        strict=True,
+    )
+    def test_multi_sku_order_preserves_both_line_items(
+        self, db_session, sample_product
+    ):
+        """
+        一笔订单含 2 个不同 SKU 的 line_items,两者的销售数据必须都被保留。
+
+        当前 bug 复现:_upsert_order 循环第二个 line_item 时,
+        existing = sess.query(Order).filter(ebay_order_id=X).first() 拿到
+        前一轮创建的 Order;update 分支覆盖 sale_price/shipping/fee/status,
+        但不更新 sku → Order 表 1 条,sku 保留第一个,sale_price 被覆盖为
+        第二个 line_item 的金额。sku 与 sale_price 错配。
+        Transaction 层因 (order_id, sku, type) 独立去重未受影响,
+        但 Order 层损坏。
+
+        守恒不变式(Day 26.5 重构后必须全部成立):
+        - sum(Transaction.SALE.amount for same order_id) == 110.0
+        - sum(Order.sale_price for same ebay_order_id) == 110.0
+          ↑ 复合 PK 方案:2 条 Order,各 50/60,sum=110
+          ↑ OrderItem 子表方案:1 条 Order,sale_price=订单总额=110
+          ↑ 当前 bug:1 条 Order,sale_price=60,sum=60 → 失败
+        """
+        self._clean_orders(db_session)
+
+        # 第二个 product(SKU-A 已由 sample_product fixture 创建)
+        from core.models import Product, ProductStatus
+        prod_b = Product(
+            sku="TEST-SKU-002",
+            title="Test Product B",
+            cost_price=Decimal("20.00"),
+            cost_currency="JPY",
+            status=ProductStatus.ACTIVE,
+            supplier="Test Supplier",
+        )
+        db_session.add(prod_b)
+        db_session.commit()
+
+        api_data = {
+            "orders": [
+                {
+                    "orderId": "ORD-MULTI-001",
+                    "creationDate": "2026-04-15T10:00:00Z",
+                    "orderFulfillmentStatus": {"status": "COMPLETED"},
+                    "buyerCountry": "US",
+                    "shippingAddress": {
+                        "recipient": "Multi SKU Buyer",
+                        "country": "US",
+                    },
+                    "fulfillmentHrefs": [],
+                    "lineItems": [
+                        {
+                            "sku": sample_product.sku,  # SKU-A
+                            "quantity": 1,
+                            "lineItemCost": {
+                                "currency": "USD",
+                                "value": "50.00",
+                            },
+                        },
+                        {
+                            "sku": prod_b.sku,  # SKU-B
+                            "quantity": 2,
+                            "lineItemCost": {
+                                "currency": "USD",
+                                "value": "30.00",
+                            },
+                        },
+                    ],
+                    "itemTxSummaries": [],
+                }
+            ],
+        }
+
+        client = self._mock_client([api_data])
+        svc = OrderSyncService(client=client)
+
+        with self._patched_db_session(db_session):
+            svc.sync_orders(
+                date_from=datetime(2026, 4, 1),
+                date_to=datetime(2026, 4, 20),
+            )
+
+        # ── 不变式 1:Transaction 层 SALE 完整(当前已成立,回归保护)──
+        sale_txns = db_session.query(Transaction).filter(
+            Transaction.order_id == "ORD-MULTI-001",
+            Transaction.type == TransactionType.SALE,
+        ).all()
+        assert len(sale_txns) == 2, (
+            f"应有 2 条 SALE Transaction,实际 {len(sale_txns)}"
+        )
+        sale_by_sku = {t.sku: float(t.amount) for t in sale_txns}
+        assert sale_by_sku == {
+            sample_product.sku: 50.0,
+            prod_b.sku: 60.0,
+        }, f"Tx SALE (sku→amount) 应为 {{A:50, B:60}},实际 {sale_by_sku}"
+
+        # ── 不变式 2:Order 层销售额守恒(当前 bug → 必失败)──
+        # 两种重构方案下都应满足:Order 侧查询结果的 sale_price 合计 == 110
+        #   - 复合 PK 方案:Order 表 2 条,各 50/60,sum=110 ✓
+        #   - OrderItem 子表方案:Order 表 1 条,sale_price=总额 110,sum=110 ✓
+        #   - 当前单 PK bug:Order 1 条,sale_price=60,sum=60 ✗
+        order_rows = db_session.query(Order).filter(
+            Order.ebay_order_id == "ORD-MULTI-001"
+        ).all()
+        order_total = sum(float(o.sale_price) for o in order_rows)
+        assert order_total == 110.0, (
+            f"Order 层销售总额应 == 110.0 (50+60),实际 {order_total}。"
+            f"当前 bug:第二个 line_item 的 sale_price 覆盖了第一个。"
+        )
