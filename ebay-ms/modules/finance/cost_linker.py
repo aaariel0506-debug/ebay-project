@@ -78,19 +78,11 @@ def link_costs(
                 continue
 
             unit_cost = float(product.cost_price)
-            # quantity 无法从 Transaction 反推，用 total_cost / unit_cost 估算
-            # 但更可靠的是直接算：amount = sale_price，total_cost = unit_cost * quantity_estimate
-            # 为避免 quantity 反推错误，改为只填 unit_cost，total_cost/profit 由调用方在 sync 时填
-            tx.unit_cost = unit_cost
-            if tx.amount and tx.amount > 0:
-                tx.total_cost = unit_cost
-                tx.profit = tx.amount - unit_cost
-                if tx.amount > 0:
-                    tx.margin = (tx.amount - unit_cost) / tx.amount
 
             if not dry_run:
+                tx.unit_cost = unit_cost
                 sess.add(tx)
-            updated += 1
+            updated += 1  # 所有找到 cost_price 的行（dry_run 时计数不写入）
 
         if not dry_run:
             sess.commit()
