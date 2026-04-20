@@ -20,7 +20,7 @@ from typing import Any
 
 from core.database.connection import get_session
 from core.ebay_api.client import EbayClient
-from core.models import Order, OrderStatus, Transaction, TransactionType
+from core.models import Order, OrderItem, OrderStatus, Transaction, TransactionType
 from loguru import logger as log
 
 # ── 结果 ─────────────────────────────────────────────────────────────────
@@ -178,16 +178,18 @@ class OrderSyncService:
         """
         将一条 eBay order 数据写入/更新 Order 表和 Transaction 表。
 
+        支持多 SKU 订单：每个 lineItem 对应一条 OrderItem 行。
+
         Returns:
             (True, None) = upserted successfully
-            (False, "sku") = skipped because SKU has no cost_price (unlinked)
+            (False, "sku") = skipped because ALL SKUs have no cost_price (unlinked)
             (False, None) = skipped because order has no lineItems or invalid data
         """
         order_id: str | None = data.get("orderId")
         if not order_id:
             return (False, None)
 
-        # ── 基本字段解析 ───────────────────────────────────────────
+        # ── 基本字段解析（订单级，一次）──────────────────────────────
         order_date_str = data.get("creationDate")
         order_date: datetime | None = None
         if order_date_str:
@@ -201,71 +203,125 @@ class OrderSyncService:
             log.debug("订单 {} 无 lineItems，跳过", order_id)
             return (False, None)
 
-        # ── 逐 SKU 写入 Order（支持多 SKU 订单）────────────────────
-        unlinked_skus_in_order: list[str] = []
+        # buyer info（订单级）
+        shipping_address = data.get("shippingAddress", {}) or {}
+        buyer_country = shipping_address.get("country") or data.get("buyerCountry")
 
+        # order status
+        api_status = data.get("orderFulfillmentStatus", {}).get("status")
+        status = _parse_order_status(api_status)
+
+        # shipping cost（订单级，从第一条 lineItem 的 shippingCostInfo 读，
+        # 或从 fulfillmentHrefs 读）
+        shipping_cost = _decimal(
+            data.get("fulfillmentHrefs", [{}])[0]
+            .get("shippingCost", {})
+            .get("value", 0) if data.get("fulfillmentHrefs") else 0
+        )
+
+        # fee（订单级）
+        total_fee = self._extract_fee_from_order(data, order_id)
+
+        # ── 计算各 lineItem 的明细 ──────────────────────────────────
+        li_data: list[dict] = []
+        unlinked_skus: list[str] = []
         with get_session() as sess:
             for li in line_items:
                 sku = li.get("sku")
                 if not sku:
                     continue
-
                 quantity = int(li.get("quantity", 0) or 0)
                 unit_price = _decimal(li.get("lineItemCost", {}).get("value", 0))
                 sale_amount = unit_price * quantity
 
-                # 运费
-                shipping_cost = _decimal(
-                    data.get("fulfillmentHrefs", [{}])[0].get("shippingCost", {})
-                    .get("value", 0) if data.get("fulfillmentHrefs") else 0
-                )
-                # eBay fee（从 order 层的 fee 汇总，或从 Finances API 补全）
-                total_fee = self._extract_fee_from_order(data, order_id)
-
-                # buyer info
-                shipping_address = data.get("shippingAddress", {}) or {}
-                buyer_country = shipping_address.get("country") or data.get("buyerCountry")
-
-                # order status
-                api_status = data.get("orderFulfillmentStatus", {}).get("status")
-                status = _parse_order_status(api_status)
-
-                # ── upsert Order ─────────────────────────────────
-                existing = sess.query(Order).filter(Order.ebay_order_id == order_id).first()
-
-                if existing:
-                    # 更新字段（Order 不变性低，以最新状态为准）
-                    existing.sale_price = sale_amount
-                    existing.shipping_cost = shipping_cost
-                    existing.ebay_fee = total_fee
-                    existing.status = status
-                    if order_date:
-                        existing.order_date = order_date
-                else:
-                    new_order = Order(
-                        ebay_order_id=order_id,
-                        sku=sku,
-                        sale_price=sale_amount,
-                        shipping_cost=shipping_cost,
-                        ebay_fee=total_fee,
-                        buyer_country=buyer_country,
-                        status=status,
-                        order_date=order_date,
-                        buyer_name=shipping_address.get("recipient", ""),
-                        shipping_address=str(shipping_address)[:500],
-                    )
-                    sess.add(new_order)
-
-                sess.flush()
-
-                # ── Transaction 流水 ─────────────────────────────
-                # 获取 Product 当前进货价（简化成本，非 FIFO）
+                # 获取 Product 当前进货价
                 from core.models import Product
                 product_row = sess.query(Product).filter(Product.sku == sku).first()
-                product_cost: Decimal | None = product_row.cost_price if product_row else None
-
+                product_cost: Decimal | None = (
+                    product_row.cost_price if product_row else None
+                )
                 if product_cost is None:
-                    unlinked_skus_in_order.append(sku)
+                    unlinked_skus.append(sku)
+
+                li_data.append({
+                    "sku": sku,
+                    "quantity": quantity,
+                    "unit_price": unit_price,
+                    "sale_amount": sale_amount,
+                    "product_cost": product_cost,
+                })
+
+            if not li_data:
+                return (False, None)
+
+            # ── Order 总额 = sum(OrderItem.sale_amount) ─────────────
+            total_sale_price = sum(d["sale_amount"] for d in li_data)
+
+            # ── upsert Order（订单级字段，无 sku）──────────────────
+            existing_order = (
+                sess.query(Order)
+                .filter(Order.ebay_order_id == order_id)
+                .first()
+            )
+            if existing_order:
+                existing_order.sale_price = float(total_sale_price)
+                existing_order.shipping_cost = float(shipping_cost)
+                existing_order.ebay_fee = float(total_fee)
+                existing_order.status = status
+                existing_order.buyer_country = buyer_country
+                if order_date:
+                    existing_order.order_date = order_date
+            else:
+                new_order = Order(
+                    ebay_order_id=order_id,
+                    sale_price=float(total_sale_price),
+                    shipping_cost=float(shipping_cost),
+                    ebay_fee=float(total_fee),
+                    buyer_country=buyer_country,
+                    status=status,
+                    order_date=order_date,
+                    buyer_name=shipping_address.get("recipient", ""),
+                    shipping_address=str(shipping_address)[:500],
+                )
+                sess.add(new_order)
+
+            sess.flush()
+
+            # ── 获取现有 OrderItem，构建 sku → id 映射 ───────────────
+            existing_items = {
+                oi.sku: oi
+                for oi in sess.query(OrderItem)
+                .filter(OrderItem.order_id == order_id)
+                .all()
+            }
+            incoming_skus = {d["sku"] for d in li_data}
+
+            # ── 删除不再存在的 OrderItem ────────────────────────────
+            for sku, oi in existing_items.items():
+                if sku not in incoming_skus:
+                    sess.delete(oi)
+
+            # ── upsert OrderItem + 写 Transaction ─────────────────
+            for d in li_data:
+                sku = d["sku"]
+                quantity = d["quantity"]
+                unit_price = d["unit_price"]
+                sale_amount = d["sale_amount"]
+                product_cost = d["product_cost"]
+
+                oi = existing_items.get(sku)
+                if oi:
+                    oi.quantity = quantity
+                    oi.unit_price = float(unit_price)
+                    oi.sale_amount = float(sale_amount)
+                else:
+                    sess.add(OrderItem(
+                        order_id=order_id,
+                        sku=sku,
+                        quantity=quantity,
+                        unit_price=float(unit_price),
+                        sale_amount=float(sale_amount),
+                    ))
 
                 self._write_transactions(
                     sess,
@@ -282,12 +338,10 @@ class OrderSyncService:
 
             sess.commit()
 
-        # 若所有 SKU 都 unlinked → 视为 unlinked 订单（跳过）
-        # 若部分 unlinked → 仍写入，仅报告这些 SKU
-        if unlinked_skus_in_order and len(unlinked_skus_in_order) == len([li for li in line_items if li.get("sku")]):
-            return (False, unlinked_skus_in_order[0])
-        elif unlinked_skus_in_order:
-            return (True, None)  # 部分关联，部分未关联，返回成功但不标记为跳过
+        # ── 判断返回值 ───────────────────────────────────────────────
+        # 全 SKU 无成本 → 视为 unlinked 订单，跳过
+        if unlinked_skus and len(unlinked_skus) == len(li_data):
+            return (False, unlinked_skus[0])
         return (True, None)
 
     def _write_transactions(

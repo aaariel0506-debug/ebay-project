@@ -7,6 +7,7 @@ from core.models import (
     InventoryType,
     ListingStatus,
     Order,
+    OrderItem,
     OrderStatus,
     Product,
     Transaction,
@@ -63,11 +64,21 @@ class TestOrder:
     def test_order_fields(self):
         fields = [c.name for c in Order.__table__.columns]
         assert "ebay_order_id" in fields
-        assert "sku" in fields
+        # sku 已移至 OrderItem 子表
         assert "sale_price" in fields
         assert "ebay_fee" in fields
         assert "buyer_country" in fields
         assert "status" in fields
+
+    def test_orderitem_fields(self):
+        """OrderItem 子表：每个订单的 SKU 明细"""
+        fields = [c.name for c in OrderItem.__table__.columns]
+        assert "id" in fields
+        assert "order_id" in fields
+        assert "sku" in fields
+        assert "quantity" in fields
+        assert "unit_price" in fields
+        assert "sale_amount" in fields
 
 
 class TestTransaction:
@@ -154,9 +165,9 @@ class TestOrderCrud:
             s.add(p)
             s.commit()
 
+        # Order 无 sku 字段（sku 在 OrderItem）
         order = Order(
             ebay_order_id="ORD-TEST-001",
-            sku="TEST-ORD-001",
             sale_price=299.99,
             shipping_cost=5.99,
             ebay_fee=29.90,
@@ -165,9 +176,30 @@ class TestOrderCrud:
         )
         with get_session() as s:
             s.add(order)
+            s.flush()  # get order_id
+
+            # OrderItem 对应 sku
+            oi = OrderItem(
+                order_id=order.ebay_order_id,
+                sku=p.sku,
+                quantity=1,
+                unit_price=299.99,
+                sale_amount=299.99,
+            )
+            s.add(oi)
             s.commit()
-            assert order.ebay_order_id == "ORD-TEST-001"
-            assert order.status == OrderStatus.PENDING
+
+            saved = s.query(Order).filter(
+                Order.ebay_order_id == "ORD-TEST-001"
+            ).first()
+            assert saved is not None
+            assert saved.status == OrderStatus.PENDING
+
+            saved_oi = s.query(OrderItem).filter(
+                OrderItem.order_id == "ORD-TEST-001"
+            ).first()
+            assert saved_oi is not None
+            assert saved_oi.sku == p.sku
 
 
 class TestTransactionCrud:

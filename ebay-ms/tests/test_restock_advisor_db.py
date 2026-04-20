@@ -6,7 +6,7 @@ Day 24: Phase 3 覆盖率补测 — restock_advisor DB 集成测试
 
 from decimal import Decimal
 
-from core.models import Order, Product, ProductStatus
+from core.models import Order, OrderItem, Product, ProductStatus
 from core.models.listing import EbayListing, ListingStatus
 
 
@@ -35,15 +35,24 @@ class TestRestockAdvisorDB:
         )
         db_session.add(listing)
 
-        # 创建已发货订单
+        # 创建已发货订单（sku 在 OrderItem 中）
         order = Order(
             ebay_order_id="ORDER-RESTOCK-001",
-            sku=sku,
             sale_price=200.00,
             shipping_cost=0,
             ebay_fee=0,
         )
         db_session.add(order)
+        db_session.flush()
+
+        order_item = OrderItem(
+            order_id=order.ebay_order_id,
+            sku=sku,
+            quantity=1,
+            unit_price=200.00,
+            sale_amount=200.00,
+        )
+        db_session.add(order_item)
         db_session.commit()
         return prod, listing, order
 

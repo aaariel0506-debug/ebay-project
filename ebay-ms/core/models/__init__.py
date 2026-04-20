@@ -4,7 +4,7 @@ from core.models.batch import BatchProgress
 from core.models.inbound import InboundReceipt, InboundReceiptItem, InboundStatus
 from core.models.inventory import Inventory, InventoryType
 from core.models.listing import EbayListing, ListingStatus
-from core.models.order import Order, OrderStatus
+from core.models.order import Order, OrderItem, OrderStatus
 from core.models.price_history import SupplierPriceHistory
 from core.models.product import Product, ProductStatus
 from core.models.stocktake import Stocktake, StocktakeItem, StocktakeStatus
@@ -22,6 +22,7 @@ __all__ = [
     "Inventory",
     "InventoryType",
     "Order",
+    "OrderItem",
     "OrderStatus",
     "Transaction",
     "TransactionType",

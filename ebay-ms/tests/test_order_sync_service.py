@@ -10,8 +10,7 @@ from decimal import Decimal
 from itertools import cycle
 from unittest.mock import MagicMock
 
-import pytest
-from core.models import Order, OrderStatus, Transaction, TransactionType
+from core.models import Order, OrderItem, OrderStatus, Transaction, TransactionType
 from modules.finance.order_sync_service import (
     OrderSyncService,
     _decimal,
@@ -142,7 +141,15 @@ class TestOrderSyncService:
             Order.ebay_order_id == "ORD-TEST-001"
         ).first()
         assert order is not None
-        assert order.sku == sample_product.sku
+        # Order.sku 已移至 OrderItem
+        order_item = db_session.query(OrderItem).filter(
+            OrderItem.order_id == "ORD-TEST-001",
+            OrderItem.sku == sample_product.sku,
+        ).first()
+        assert order_item is not None
+        assert order_item.quantity == 2
+        assert order_item.sale_amount == float(Decimal("100.00"))
+
         assert order.sale_price == Decimal("100.00")
         assert order.status == OrderStatus.SHIPPED
         assert order.buyer_country == "US"
@@ -349,15 +356,6 @@ class TestOrderSyncService:
         assert order2.sale_price == Decimal("40.00")
 
     # ── Day 26.5 重构前锁定的 bug ────────────────────────────────────────
-    @pytest.mark.xfail(
-        reason=(
-            "Day 26.5 待修复:Order 单 PK(ebay_order_id)导致多 SKU 订单"
-            "的 line_items 互相覆盖。重构(OrderItem 子表 或 复合 PK)完成后,"
-            "请(1) 确保本测试通过,必要时微调断言匹配新 schema,"
-            "(2) 移除本 xfail 标记。strict=True 会在意外 pass 时报错提醒。"
-        ),
-        strict=True,
-    )
     def test_multi_sku_order_preserves_both_line_items(
         self, db_session, sample_product
     ):
