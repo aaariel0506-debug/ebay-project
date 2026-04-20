@@ -152,6 +152,11 @@ class TestOrderSyncService:
         ).first()
         assert tx_sale is not None
         assert tx_sale.amount == 100.0
+        # CostLinker：unit_cost 来自 Product.cost_price，total_cost = unit_cost * qty
+        assert tx_sale.unit_cost == float(sample_product.cost_price)  # 100.0
+        assert tx_sale.total_cost == float(sample_product.cost_price * 2)  # 200.0
+        assert tx_sale.profit == 100.0 - float(sample_product.cost_price * 2)  # -100.0
+        assert tx_sale.margin is not None
 
     def test_sync_with_fee(self, db_session, sample_product):
         """带 FEE 的订单 → Transaction 有 FEE 记录"""

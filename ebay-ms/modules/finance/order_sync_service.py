@@ -32,12 +32,14 @@ class OrderSyncResult:
     total_orders: int
     upserted: int
     skipped: int
+    unlinked_skus: list[str] = field(default_factory=list)
     errors: list[dict] = field(default_factory=list)
 
     def summary(self) -> str:
         return (
             f"订单同步完成：共 {self.total_orders} 条 / "
             f"写入 {self.upserted} / 跳过 {self.skipped} / "
+            f"未关联SKU {len(self.unlinked_skus)} 条 / "
             f"错误 {len(self.errors)} 条"
         )
 
@@ -144,11 +146,13 @@ class OrderSyncService:
 
             for order_data in orders:
                 try:
-                    ok = self._upsert_order(order_data)
-                    if ok:
-                        result.upserted += 1
-                    else:
+                    ok, unlinked_sku = self._upsert_order(order_data)
+                    if not ok:
                         result.skipped += 1
+                        if unlinked_sku:
+                            result.unlinked_skus.append(unlinked_sku)
+                    else:
+                        result.upserted += 1
                 except Exception as exc:
                     log.error("写入订单失败 [{}]: {}", order_data.get("orderId"), exc)
                     result.errors.append({
@@ -170,16 +174,18 @@ class OrderSyncService:
 
     # ── 内部：upsert ───────────────────────────────────────────────────
 
-    def _upsert_order(self, data: dict) -> bool:
+    def _upsert_order(self, data: dict) -> tuple[bool, str | None]:
         """
         将一条 eBay order 数据写入/更新 Order 表和 Transaction 表。
 
         Returns:
-            True = upserted/updated, False = skipped（数据无效）
+            (True, None) = upserted successfully
+            (False, "sku") = skipped because SKU has no cost_price (unlinked)
+            (False, None) = skipped because order has no lineItems or invalid data
         """
         order_id: str | None = data.get("orderId")
         if not order_id:
-            return False
+            return (False, None)
 
         # ── 基本字段解析 ───────────────────────────────────────────
         order_date_str = data.get("creationDate")
@@ -193,9 +199,11 @@ class OrderSyncService:
         line_items: list[dict] = data.get("lineItems", [])
         if not line_items:
             log.debug("订单 {} 无 lineItems，跳过", order_id)
-            return False
+            return (False, None)
 
         # ── 逐 SKU 写入 Order（支持多 SKU 订单）────────────────────
+        unlinked_skus_in_order: list[str] = []
+
         with get_session() as sess:
             for li in line_items:
                 sku = li.get("sku")
@@ -255,6 +263,10 @@ class OrderSyncService:
                 from core.models import Product
                 product_row = sess.query(Product).filter(Product.sku == sku).first()
                 product_cost: Decimal | None = product_row.cost_price if product_row else None
+
+                if product_cost is None:
+                    unlinked_skus_in_order.append(sku)
+
                 self._write_transactions(
                     sess,
                     order_id=order_id,
@@ -269,7 +281,14 @@ class OrderSyncService:
                 )
 
             sess.commit()
-        return True
+
+        # 若所有 SKU 都 unlinked → 视为 unlinked 订单（跳过）
+        # 若部分 unlinked → 仍写入，仅报告这些 SKU
+        if unlinked_skus_in_order and len(unlinked_skus_in_order) == len([li for li in line_items if li.get("sku")]):
+            return (False, unlinked_skus_in_order[0])
+        elif unlinked_skus_in_order:
+            return (True, None)  # 部分关联，部分未关联，返回成功但不标记为跳过
+        return (True, None)
 
     def _write_transactions(
         self,

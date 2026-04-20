@@ -171,6 +171,24 @@ def run() -> int:
     p_stk_list.add_argument("--limit", type=int, default=50)
     inv_offline_sub.add_parser("report", help="导出库存报表（快照 / 出入库明细）")
 
+    # ── finance 模块 ────────────────────────────────────────────────────────
+    finance_p = sub.add_parser("finance", help="财务模块")
+    finance_sub = finance_p.add_subparsers(dest="cmd", help="子命令")
+
+    p_sync = finance_sub.add_parser("sync-orders", help="同步 eBay 订单")
+    p_sync.add_argument("--date-from", dest="date_from", help="起始日期 YYYY-MM-DD")
+    p_sync.add_argument("--date-to", dest="date_to", help="结束日期 YYYY-MM-DD")
+    p_sync.add_argument("--full", action="store_true", help="全量同步（忽略日期范围）")
+
+    p_link = finance_sub.add_parser("link-costs", help="补填历史 Transaction 成本")
+    p_link.add_argument("--dry-run", action="store_true", default=False, help="模拟运行")
+    p_link.add_argument("--since", dest="since", help="仅处理该日期之后的记录 YYYY-MM-DD")
+    p_link.add_argument("--export", dest="export", help="导出 unlinked 订单到 xlsx 路径")
+
+    p_unlinked = finance_sub.add_parser("unlinked-orders", help="列出无法关联成本的订单")
+    p_unlinked.add_argument("--since", dest="since", help="YYYY-MM-DD")
+    p_unlinked.add_argument("--export", dest="export", help="导出到 xlsx 路径")
+
     args = parser.parse_args()
 
     if args.module is None:
@@ -187,6 +205,58 @@ def run() -> int:
             return run_inventory_offline_cmd(sys.argv[4:] if len(sys.argv) > 4 else [])
         from api.cli.inventory_online_cli import run_inventory_online_cmd
         return run_inventory_online_cmd(sys.argv[3:] if len(sys.argv) > 3 else [])
+
+    if args.module == "finance":
+        from modules.finance.cost_linker import export_unlinked_xlsx, link_costs, list_unlinked_orders
+        from modules.finance.order_sync_service import OrderSyncService
+
+        if args.cmd == "sync-orders":
+            date_from = None
+            date_to = None
+            if not args.full:
+                from datetime import datetime
+                if args.date_from:
+                    date_from = datetime.strptime(args.date_from, "%Y-%m-%d")
+                if args.date_to:
+                    date_to = datetime.strptime(args.date_to, "%Y-%m-%d")
+
+            svc = OrderSyncService()
+            result = svc.sync_orders(
+                date_from=date_from or datetime(2020, 1, 1),
+                date_to=date_to or datetime.now(),
+            )
+            print(result.summary())
+            if result.unlinked_skus:
+                print(f"⚠️  未关联 SKU（Product 表无此 SKU）：{result.unlinked_skus}")
+            return 0
+
+        if args.cmd == "link-costs":
+            from datetime import datetime as dt
+            since = None
+            if args.since:
+                since = dt.strptime(args.since, "%Y-%m-%d")
+            result = link_costs(dry_run=args.dry_run, since=since)
+            print(result.summary())
+            if args.export and result.unlinked_skus:
+                from pathlib import Path
+                n = export_unlinked_xlsx(Path(args.export), since=since)
+                print(f"导出 {n} 条 unlinked 订单到 {args.export}")
+            return 0
+
+        if args.cmd == "unlinked-orders":
+            from datetime import datetime as dt
+            since = dt.strptime(args.since, "%Y-%m-%d") if args.since else None
+            orders = list_unlinked_orders(since=since)
+            if not orders:
+                print("没有 unlinked 订单")
+                return 0
+            for o in orders:
+                print(f"  {o['order_id']}  SKU={o['sku']}  amount={o['amount']} {o['currency']}  date={o['date']}")
+            if args.export:
+                from pathlib import Path
+                n = export_unlinked_xlsx(Path(args.export), since=since)
+                print(f"导出 {n} 条到 {args.export}")
+            return 0
 
     parser.print_help()
     return 0
