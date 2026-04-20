@@ -8,7 +8,6 @@ Create Date: 2026-04-20 23:25:36.810718
 
 from typing import Sequence, Union
 
-import sqlalchemy as sa
 from alembic import op
 
 revision: str = "82b6ba3706c4"  # pragma: allowlist secret
@@ -20,31 +19,25 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """创建 OrderItem 子表，数据迁移，然后从 Order 表删除 sku 字段。"""
 
-    # ── 1. 创建 order_items 表 ─────────────────────────────────────────
-    op.create_table(
-        "order_items",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("order_id", sa.String(length=64), nullable=False),
-        sa.Column("sku", sa.String(length=64), nullable=False),
-        sa.Column("quantity", sa.Integer(), nullable=False, server_default="1"),
-        sa.Column("unit_price", sa.Numeric(precision=12, scale=4), nullable=False),
-        sa.Column("sale_amount", sa.Numeric(precision=12, scale=2), nullable=False),
-        sa.Column(
-            "created_at",
-            sa.DateTime(),
-            nullable=False,
-            server_default=sa.text("CURRENT_TIMESTAMP"),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(),
-            nullable=False,
-            server_default=sa.text("CURRENT_TIMESTAMP"),
-        ),
-        sa.ForeignKeyConstraint(["order_id"], ["orders.ebay_order_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["sku"], ["products.sku"]),
-        sa.PrimaryKeyConstraint("id"),
-    )
+    # ── 1. 创建 order_items 表（含唯一约束）─────────────────────────
+    # SQLite 不支持 CREATE TABLE 后加 UNIQUE，用 raw SQL 创建完整表定义
+    # IF NOT EXISTS 防止重跑失败
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS order_items (
+            id INTEGER NOT NULL,
+            order_id VARCHAR(64) NOT NULL,
+            sku VARCHAR(64) NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            unit_price NUMERIC(12, 4) NOT NULL,
+            sale_amount NUMERIC(12, 2) NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            FOREIGN KEY (order_id) REFERENCES orders(ebay_order_id) ON DELETE CASCADE,
+            FOREIGN KEY (sku) REFERENCES products(sku),
+            UNIQUE (order_id, sku)
+        )
+    """)
     op.create_index("ix_order_items_order_id", "order_items", ["order_id"], unique=False)
     op.create_index("ix_order_items_sku", "order_items", ["sku"], unique=False)
 
@@ -67,12 +60,28 @@ def upgrade() -> None:
 
     # ── 3. 删除 orders.sku 列（SQLite rename-and-copy 方式）──────────────
     # SQLite 不支持 DROP COLUMN，使用 CREATE TABLE ... AS ... 方式
+    # 必须显式创建表（含 PRIMARY KEY）再插入数据，否则 PK 会丢失
     op.execute("PRAGMA foreign_keys=off")
-    # 删索引（如果存在）
     op.execute("DROP INDEX IF EXISTS ix_orders_sku")
-    # 创建新表（不含 sku）
+    op.execute("DROP TABLE IF EXISTS orders_new")
     op.execute("""
-        CREATE TABLE orders_new AS
+        CREATE TABLE orders_new (
+            ebay_order_id VARCHAR(64) NOT NULL PRIMARY KEY,
+            sale_price NUMERIC(12, 2) NOT NULL,
+            shipping_cost NUMERIC(12, 2) NOT NULL,
+            ebay_fee NUMERIC(12, 2) NOT NULL,
+            buyer_country VARCHAR(3),
+            status VARCHAR(9) NOT NULL,
+            order_date DATETIME,
+            ship_date DATETIME,
+            buyer_name VARCHAR(256),
+            shipping_address VARCHAR(512),
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        )
+    """)
+    op.execute("""
+        INSERT INTO orders_new
         SELECT
             ebay_order_id,
             sale_price,
@@ -97,7 +106,6 @@ def downgrade() -> None:
     """从 OrderItem 恢复数据到 Order.sku，然后删除 OrderItem 表。"""
 
     # ── 1. 恢复 orders.sku 列 ─────────────────────────────────────────
-    # 先重建带 sku 的 orders 表
     op.execute("PRAGMA foreign_keys=off")
     op.execute("""
         CREATE TABLE orders_old AS
@@ -119,7 +127,7 @@ def downgrade() -> None:
     op.execute("DROP TABLE orders")
     op.execute("""
         CREATE TABLE orders (
-            ebay_order_id VARCHAR(64) NOT NULL,
+            ebay_order_id VARCHAR(64) NOT NULL PRIMARY KEY,
             sku VARCHAR(64) NOT NULL,
             sale_price NUMERIC(12, 2) NOT NULL,
             shipping_cost NUMERIC(12, 2) NOT NULL,
@@ -131,8 +139,7 @@ def downgrade() -> None:
             buyer_name VARCHAR(256),
             shipping_address VARCHAR(512),
             created_at DATETIME NOT NULL,
-            updated_at DATETIME NOT NULL,
-            PRIMARY KEY (ebay_order_id)
+            updated_at DATETIME NOT NULL
         )
     """)
     # 从 order_items 回填 sku（每个 order 取第一条）
@@ -151,6 +158,4 @@ def downgrade() -> None:
     op.execute("PRAGMA foreign_keys=on")
 
     # ── 2. 删除 order_items 表 ─────────────────────────────────────────
-    op.drop_index("ix_order_items_sku", table_name="order_items")
-    op.drop_index("ix_order_items_order_id", table_name="order_items")
-    op.drop_table("order_items")
+    op.execute("DROP TABLE IF EXISTS order_items")

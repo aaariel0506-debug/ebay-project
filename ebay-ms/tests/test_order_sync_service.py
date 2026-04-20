@@ -256,13 +256,29 @@ class TestOrderSyncService:
             assert r2.upserted == 1  # update 不报错
 
             # Transaction：每种 type 各自只有一条（幂等）
-            for t in [TransactionType.SALE, TransactionType.SHIPPING, TransactionType.FEE]:
-                cnt = db_session.query(Transaction).filter(
-                    Transaction.order_id == "ORD-IDEM-001",
-                    Transaction.sku == sample_product.sku,
-                    Transaction.type == t,
-                ).count()
-                assert cnt == 1, f"{t.value} 应只有 1 条，实际 {cnt}"
+            # SALE: per sku (有 sku)
+            cnt_sale = db_session.query(Transaction).filter(
+                Transaction.order_id == "ORD-IDEM-001",
+                Transaction.sku == sample_product.sku,
+                Transaction.type == TransactionType.SALE,
+            ).count()
+            assert cnt_sale == 1, f"SALE 应只有 1 条，实际 {cnt_sale}"
+
+            # SHIPPING: 订单级，sku=None
+            cnt_shipping = db_session.query(Transaction).filter(
+                Transaction.order_id == "ORD-IDEM-001",
+                Transaction.sku.is_(None),
+                Transaction.type == TransactionType.SHIPPING,
+            ).count()
+            assert cnt_shipping == 1, f"SHIPPING 应只有 1 条，实际 {cnt_shipping}"
+
+            # FEE: 订单级，sku=None
+            cnt_fee = db_session.query(Transaction).filter(
+                Transaction.order_id == "ORD-IDEM-001",
+                Transaction.sku.is_(None),
+                Transaction.type == TransactionType.FEE,
+            ).count()
+            assert cnt_fee == 1, f"FEE 应只有 1 条，实际 {cnt_fee}"
 
         # Order 记录也只有 1 条
         count = db_session.query(Order).filter(
@@ -463,3 +479,45 @@ class TestOrderSyncService:
             f"Order 层销售总额应 == 110.0 (50+60),实际 {order_total}。"
             f"当前 bug:第二个 line_item 的 sale_price 覆盖了第一个。"
         )
+
+        # ── 不变式 3:FEE 订单级只写一条，sum(FEE) == -Order.ebay_fee ──
+        fee_txns = db_session.query(Transaction).filter(
+            Transaction.order_id == "ORD-MULTI-001",
+            Transaction.type == TransactionType.FEE,
+        ).all()
+        # api_data 没有 itemTxSummaries，所以 total_fee=0，FEE 不会写入
+        # 验证：没有 FEE 记录（因为 fee=0）
+        assert len(fee_txns) == 0, f"fee=0 时不应有 FEE 记录，实际 {len(fee_txns)}"
+
+        # ── 不变式 4:SHIPPING 订单级只写一条 ─────────────────────────
+        shipping_txns = db_session.query(Transaction).filter(
+            Transaction.order_id == "ORD-MULTI-001",
+            Transaction.type == TransactionType.SHIPPING,
+        ).all()
+        # api_data 没有 fulfillmentHrefs，所以 shipping_cost=0，SHIPPING 不会写入
+        assert len(shipping_txns) == 0, "shipping_cost=0 时不应有 SHIPPING 记录"
+
+        # ── 不变式 5:OrderItem 子表数据正确 ─────────────────────────
+        order_items = db_session.query(OrderItem).filter(
+            OrderItem.order_id == "ORD-MULTI-001"
+        ).all()
+        assert len(order_items) == 2, f"应有 2 条 OrderItem，实际 {len(order_items)}"
+        oi_by_sku = {oi.sku: oi for oi in order_items}
+        assert oi_by_sku[sample_product.sku].quantity == 1
+        assert oi_by_sku[sample_product.sku].sale_amount == 50.0
+        assert oi_by_sku[prod_b.sku].quantity == 2
+        assert oi_by_sku[prod_b.sku].sale_amount == 60.0
+
+        # ── 不变式 6:OrderItem unique constraint（同一 order 不允许重复 sku）─
+        import pytest
+        dup_oi = OrderItem(
+            order_id="ORD-MULTI-001",
+            sku=sample_product.sku,
+            quantity=1,
+            unit_price=50.0,
+            sale_amount=50.0,
+        )
+        db_session.add(dup_oi)
+        with pytest.raises(Exception):  # SQLite violates unique constraint
+            db_session.flush()
+        db_session.rollback()

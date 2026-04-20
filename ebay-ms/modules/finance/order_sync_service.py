@@ -301,39 +301,52 @@ class OrderSyncService:
                 if sku not in incoming_skus:
                     sess.delete(oi)
 
-            # ── upsert OrderItem + 写 Transaction ─────────────────
+            # ── upsert OrderItem（幂等：同 order_id + sku 用 update）───────
             for d in li_data:
-                sku = d["sku"]
-                quantity = d["quantity"]
-                unit_price = d["unit_price"]
-                sale_amount = d["sale_amount"]
-                product_cost = d["product_cost"]
-
-                oi = existing_items.get(sku)
+                oi = existing_items.get(d["sku"])
                 if oi:
-                    oi.quantity = quantity
-                    oi.unit_price = float(unit_price)
-                    oi.sale_amount = float(sale_amount)
+                    oi.quantity = d["quantity"]
+                    oi.unit_price = float(d["unit_price"])
+                    oi.sale_amount = float(d["sale_amount"])
                 else:
                     sess.add(OrderItem(
                         order_id=order_id,
-                        sku=sku,
-                        quantity=quantity,
-                        unit_price=float(unit_price),
-                        sale_amount=float(sale_amount),
+                        sku=d["sku"],
+                        quantity=d["quantity"],
+                        unit_price=float(d["unit_price"]),
+                        sale_amount=float(d["sale_amount"]),
                     ))
 
-                self._write_transactions(
+            # ── 写 Transaction ─────────────────────────────────────────
+            # SALE：按 line_item 逐条写（每 SKU 一条，幂等）
+            for d in li_data:
+                self._write_sale_transaction(
                     sess,
                     order_id=order_id,
-                    sku=sku,
-                    quantity=quantity,
-                    sale_amount=sale_amount,
-                    shipping_cost=shipping_cost,
+                    sku=d["sku"],
+                    quantity=d["quantity"],
+                    sale_amount=d["sale_amount"],
+                    order_date=order_date,
+                    currency="USD",
+                    unit_cost=d["product_cost"],
+                )
+
+            # FEE / SHIPPING：订单级，只写一次（不在循环内）
+            if total_fee > 0:
+                self._write_fee_transaction(
+                    sess,
+                    order_id=order_id,
                     fee_amount=total_fee,
                     order_date=order_date,
                     currency="USD",
-                    unit_cost=product_cost,
+                )
+            if shipping_cost > 0:
+                self._write_shipping_transaction(
+                    sess,
+                    order_id=order_id,
+                    shipping_cost=shipping_cost,
+                    order_date=order_date,
+                    currency="USD",
                 )
 
             sess.commit()
@@ -344,92 +357,94 @@ class OrderSyncService:
             return (False, unlinked_skus[0])
         return (True, None)
 
-    def _write_transactions(
+    def _write_sale_transaction(
         self,
         sess,
         order_id: str,
         sku: str,
         quantity: int,
         sale_amount: Decimal,
-        shipping_cost: Decimal,
-        fee_amount: Decimal,
         order_date: datetime | None,
         currency: str,
         unit_cost: Decimal | None = None,
     ):
-        """
-        为一笔 Order 写入 Transaction 流水（Sale + Fee + Shipping）。
-
-        幂等性：每种 TransactionType 独立去重检查，
-        避免同一 (order_id, sku) 下 SALE 存在后 BLOCK FEE/SHIPPING 写入。
-        """
-
-        # ── 成本和利润计算（SALE 专用）────────────────────
+        """写 SALE 流水（幂等：每 order_id + sku 只写一次）"""
+        has = sess.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.sku == sku,
+            Transaction.type == TransactionType.SALE,
+        ).first()
+        if has:
+            return
         total_cost_val: float | None = None
         profit_val: float | None = None
         margin_val: float | None = None
-
         if sale_amount > 0 and unit_cost is not None:
             total_cost_val = float(unit_cost * quantity)
             profit_val = float(sale_amount) - total_cost_val
             sale_f = float(sale_amount)
             if sale_f > 0:
                 margin_val = profit_val / sale_f
+        sess.add(Transaction(
+            order_id=order_id,
+            sku=sku,
+            type=TransactionType.SALE,
+            amount=float(sale_amount),
+            currency=currency,
+            date=order_date,
+            unit_cost=float(unit_cost) if unit_cost is not None else None,
+            total_cost=total_cost_val,
+            profit=profit_val,
+            margin=margin_val,
+        ))
 
-        # SALE
-        if sale_amount > 0:
-            has_sale = sess.query(Transaction).filter(
-                Transaction.order_id == order_id,
-                Transaction.sku == sku,
-                Transaction.type == TransactionType.SALE,
-            ).first()
-            if not has_sale:
-                sess.add(Transaction(
-                    order_id=order_id,
-                    sku=sku,
-                    type=TransactionType.SALE,
-                    amount=float(sale_amount),
-                    currency=currency,
-                    date=order_date,
-                    unit_cost=float(unit_cost) if unit_cost is not None else None,
-                    total_cost=total_cost_val,
-                    profit=profit_val,
-                    margin=margin_val,
-                ))
+    def _write_fee_transaction(
+        self,
+        sess,
+        order_id: str,
+        fee_amount: Decimal,
+        order_date: datetime | None,
+        currency: str,
+    ):
+        """写 FEE 流水（订单级，每 order_id 只写一条，sku=NULL）"""
+        has = sess.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.FEE,
+        ).first()
+        if has:
+            return
+        sess.add(Transaction(
+            order_id=order_id,
+            sku=None,  # 订单级费用，无 SKU
+            type=TransactionType.FEE,
+            amount=float(-fee_amount),
+            currency=currency,
+            date=order_date,
+        ))
 
-        # SHIPPING
-        if shipping_cost > 0:
-            has_shipping = sess.query(Transaction).filter(
-                Transaction.order_id == order_id,
-                Transaction.sku == sku,
-                Transaction.type == TransactionType.SHIPPING,
-            ).first()
-            if not has_shipping:
-                sess.add(Transaction(
-                    order_id=order_id,
-                    sku=sku,
-                    type=TransactionType.SHIPPING,
-                    amount=float(shipping_cost),
-                    currency=currency,
-                    date=order_date,
-                ))
-
-        # FEE（eBay fee，负数）
-        if fee_amount > 0:
-            has_fee = sess.query(Transaction).filter(
-                Transaction.order_id == order_id,
-                Transaction.sku == sku,
-                Transaction.type == TransactionType.FEE,
-            ).first()
-            if not has_fee:
-                sess.add(Transaction(
-                    order_id=order_id,
-                    sku=sku,
-                    type=TransactionType.FEE,
-                    amount=float(-fee_amount),
-                    currency=currency,
-                    date=order_date,
-                ))
+    def _write_shipping_transaction(
+        self,
+        sess,
+        order_id: str,
+        shipping_cost: Decimal,
+        order_date: datetime | None,
+        currency: str,
+    ):
+        """写 SHIPPING 流水（订单级，每 order_id 只写一条，sku=NULL）"""
+        has = sess.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.SHIPPING,
+        ).first()
+        if has:
+            return
+        sess.add(Transaction(
+            order_id=order_id,
+            sku=None,  # 订单级运费，无 SKU
+            type=TransactionType.SHIPPING,
+            amount=float(shipping_cost),
+            currency=currency,
+            date=order_date,
+        ))
 
     def _extract_fee_from_order(self, data: dict, order_id: str) -> Decimal:
         """

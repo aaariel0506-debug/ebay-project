@@ -79,6 +79,6 @@ class OrderItem(Base, TimestampMixin):
 
     __table_args__ = (
         # 同一个 order 内 sku 不重复（幂等性约束）
-        # 用唯一索引代替复合 PK，保持 order_id 单 PK
-        # Unique constraint: one SKU per order (for idempotency)
+        # 在 migration 中创建: op.create_unique_constraint(
+        #     "uq_order_items_order_sku", "order_items", ["order_id", "sku"])
     )
