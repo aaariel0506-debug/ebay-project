@@ -150,17 +150,15 @@ class InventoryReporter:
             receipt_nos = [r.related_order for r in rows if r.related_order]
             cost_by_receipt_sku: dict[tuple[str, str], Decimal] = {}
             if receipt_nos:
-                items = (
-                    sess.query(InboundReceiptItem)
+                # 一次查询搞定：join 带出 receipt_no，消除 N+1
+                rows_cost = (
+                    sess.query(InboundReceiptItem, InboundReceipt.receipt_no)
                     .join(InboundReceipt, InboundReceipt.id == InboundReceiptItem.receipt_id)
                     .filter(InboundReceipt.receipt_no.in_(receipt_nos))
                     .all()
                 )
-                for item in items:
-                    # 获取 receipt_no
-                    receipt = sess.query(InboundReceipt).filter(InboundReceipt.id == item.receipt_id).first()
-                    if receipt:
-                        cost_by_receipt_sku[(receipt.receipt_no, item.sku)] = item.cost_price
+                for item, receipt_no in rows_cost:
+                    cost_by_receipt_sku[(receipt_no, item.sku)] = item.cost_price
 
             # 预查询 Product.cost_price（OUT/ADJUST 的 fallback）
             skus = [r.sku for r in rows]
