@@ -4,10 +4,9 @@ tests/test_restock_advisor_db.py
 Day 24: Phase 3 覆盖率补测 — restock_advisor DB 集成测试
 """
 
-from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from core.models import Order, OrderStatus, Product, ProductStatus
+from core.models import Order, Product, ProductStatus
 from core.models.listing import EbayListing, ListingStatus
 
 

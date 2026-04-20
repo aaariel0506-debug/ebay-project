@@ -21,7 +21,7 @@ def upgrade() -> None:
     """Upgrade schema: add supplier_price_history table."""
     op.create_table(
         'supplier_price_history',
-        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column('id', sa.Integer(), primary_key=True, autoincrement=True, nullable=False),
         sa.Column('sku', sa.String(length=64), nullable=False),
         sa.Column('supplier', sa.String(length=128), nullable=True),
         sa.Column('price', sa.Numeric(precision=12, scale=2), nullable=False),
