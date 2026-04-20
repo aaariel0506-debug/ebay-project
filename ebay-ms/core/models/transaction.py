@@ -41,3 +41,8 @@ class Transaction(Base, TimestampMixin):
     date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     note: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Cost and profit (COGS)
+    unit_cost: Mapped[float | None] = mapped_column(Numeric(12, 4), nullable=True)
+    total_cost: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
+    profit: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
+    margin: Mapped[float | None] = mapped_column(Numeric(6, 4), nullable=True)

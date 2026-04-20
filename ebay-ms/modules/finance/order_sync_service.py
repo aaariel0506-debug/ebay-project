@@ -251,15 +251,21 @@ class OrderSyncService:
                 sess.flush()
 
                 # ── Transaction 流水 ─────────────────────────────
+                # 获取 Product 当前进货价（简化成本，非 FIFO）
+                from core.models import Product
+                product_row = sess.query(Product).filter(Product.sku == sku).first()
+                product_cost: Decimal | None = product_row.cost_price if product_row else None
                 self._write_transactions(
                     sess,
                     order_id=order_id,
                     sku=sku,
+                    quantity=quantity,
                     sale_amount=sale_amount,
                     shipping_cost=shipping_cost,
                     fee_amount=total_fee,
                     order_date=order_date,
                     currency="USD",
+                    unit_cost=product_cost,
                 )
 
             sess.commit()
@@ -270,11 +276,13 @@ class OrderSyncService:
         sess,
         order_id: str,
         sku: str,
+        quantity: int,
         sale_amount: Decimal,
         shipping_cost: Decimal,
         fee_amount: Decimal,
         order_date: datetime | None,
         currency: str,
+        unit_cost: Decimal | None = None,
     ):
         """
         为一笔 Order 写入 Transaction 流水（Sale + Fee + Shipping）。
@@ -282,6 +290,18 @@ class OrderSyncService:
         幂等性：每种 TransactionType 独立去重检查，
         避免同一 (order_id, sku) 下 SALE 存在后 BLOCK FEE/SHIPPING 写入。
         """
+
+        # ── 成本和利润计算（SALE 专用）────────────────────
+        total_cost_val: float | None = None
+        profit_val: float | None = None
+        margin_val: float | None = None
+
+        if sale_amount > 0 and unit_cost is not None:
+            total_cost_val = float(unit_cost * quantity)
+            profit_val = float(sale_amount) - total_cost_val
+            sale_f = float(sale_amount)
+            if sale_f > 0:
+                margin_val = profit_val / sale_f
 
         # SALE
         if sale_amount > 0:
@@ -298,6 +318,10 @@ class OrderSyncService:
                     amount=float(sale_amount),
                     currency=currency,
                     date=order_date,
+                    unit_cost=float(unit_cost) if unit_cost is not None else None,
+                    total_cost=total_cost_val,
+                    profit=profit_val,
+                    margin=margin_val,
                 ))
 
         # SHIPPING
