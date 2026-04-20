@@ -3,7 +3,7 @@ import enum
 from datetime import datetime
 
 from core.models.base import Base, TimestampMixin
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String
+from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 
@@ -79,6 +79,5 @@ class OrderItem(Base, TimestampMixin):
 
     __table_args__ = (
         # 同一个 order 内 sku 不重复（幂等性约束）
-        # 在 migration 中创建: op.create_unique_constraint(
-        #     "uq_order_items_order_sku", "order_items", ["order_id", "sku"])
+        UniqueConstraint("order_id", "sku", name="uq_order_items_order_sku"),
     )
