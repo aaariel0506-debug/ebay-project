@@ -226,3 +226,137 @@ class TestInventoryReporter:
         in_cell = ws.cell(row=4, column=1)
         in_color = in_cell.fill.fgColor.rgb
         assert in_color.endswith("C6EFCE"), f"IN should be green, got {in_color}"
+
+    def test_get_movements_in_cost_filled(self, db_session, sample_product):
+        """IN 类型从 InboundReceiptItem 填充 unit_cost / total_cost"""
+        from datetime import datetime, timezone
+        from decimal import Decimal
+
+        from core.models import InboundReceipt, InboundReceiptItem, InboundStatus, Inventory, InventoryType
+        from modules.inventory_offline.reporter import InventoryReporter
+
+        # 创建入库单 + 明细（含 cost_price）
+        receipt = InboundReceipt(
+            receipt_no="IN-REPORT-COST-001",
+            supplier="Test Supplier",
+            status=InboundStatus.RECEIVED,
+        )
+        db_session.add(receipt)
+        db_session.flush()
+
+        item = InboundReceiptItem(
+            receipt_id=receipt.id,
+            sku=sample_product.sku,
+            expected_quantity=10,
+            received_quantity=10,
+            cost_price=Decimal("150.00"),
+        )
+        db_session.add(item)
+
+        # 创建 Inventory IN 记录，related_order = receipt_no
+        inv = Inventory(
+            sku=sample_product.sku,
+            type=InventoryType.IN,
+            quantity=10,
+            location="A-1",
+            related_order=receipt.receipt_no,
+            occurred_at=datetime.now(timezone.utc),
+            operator="test",
+        )
+        db_session.add(inv)
+        db_session.commit()
+
+        reporter = InventoryReporter()
+        movements = reporter.get_movements(sku=sample_product.sku, movement_type="IN")
+
+        assert len(movements) == 1
+        assert movements[0].unit_cost == Decimal("150.00")
+        assert movements[0].total_cost == Decimal("1500.00")  # 10 * 150
+
+    def test_get_movements_out_uses_product_cost(self, db_session, sample_product):
+        """OUT 类型 fallback 到 Product.cost_price"""
+        from datetime import datetime, timezone
+        from decimal import Decimal
+
+        from core.models import Inventory, InventoryType
+        from modules.inventory_offline.reporter import InventoryReporter
+
+        inv = Inventory(
+            sku=sample_product.sku,
+            type=InventoryType.OUT,
+            quantity=3,
+            location="A-1",
+            related_order="ORDER-OUT-001",
+            occurred_at=datetime.now(timezone.utc),
+            operator="test",
+        )
+        db_session.add(inv)
+        db_session.commit()
+
+        reporter = InventoryReporter()
+        movements = reporter.get_movements(sku=sample_product.sku, movement_type="OUT")
+
+        assert len(movements) == 1
+        # sample_product fixture cost_price = Decimal("100.00")
+        assert movements[0].unit_cost == Decimal("100.00")
+        assert movements[0].total_cost == Decimal("300.00")  # 3 * 100
+
+    def test_export_movements_cost_columns(self, db_session, sample_product, tmp_path):
+        """出入库明细 Excel 导出包含成本数据"""
+        from datetime import datetime, timezone
+        from decimal import Decimal
+
+        from core.models import InboundReceipt, InboundReceiptItem, InboundStatus, Inventory, InventoryType
+        from modules.inventory_offline.reporter import InventoryReporter
+
+        # 建入库单 + Inventory IN
+        receipt = InboundReceipt(
+            receipt_no="IN-REPORT-COST-002",
+            supplier="Test Supplier",
+            status=InboundStatus.RECEIVED,
+        )
+        db_session.add(receipt)
+        db_session.flush()
+
+        item = InboundReceiptItem(
+            receipt_id=receipt.id,
+            sku=sample_product.sku,
+            expected_quantity=5,
+            received_quantity=5,
+            cost_price=Decimal("200.00"),
+        )
+        db_session.add(item)
+
+        inv = Inventory(
+            sku=sample_product.sku,
+            type=InventoryType.IN,
+            quantity=5,
+            location="B-2",
+            related_order=receipt.receipt_no,
+            occurred_at=datetime.now(timezone.utc),
+            operator="test",
+        )
+        db_session.add(inv)
+        db_session.commit()
+
+        reporter = InventoryReporter()
+        out_path = tmp_path / "movements_cost.xlsx"
+        reporter.export_movements_to_excel(out_path)
+
+        import openpyxl
+        wb = openpyxl.load_workbook(out_path)
+        ws = wb.active
+
+        # 表头：单件成本=col5, 总成本=col6
+        assert ws.cell(row=1, column=5).value == "单件成本"
+        assert ws.cell(row=1, column=6).value == "总成本"
+
+        # 数据行：IN 记录（成本 = 200）
+        in_row = None
+        for row in range(2, ws.max_row + 1):
+            if ws.cell(row=row, column=2).value == "in":
+                in_row = row
+                break
+        assert in_row is not None
+        assert ws.cell(row=in_row, column=5).value == 200.0
+        assert ws.cell(row=in_row, column=6).value == 1000.0  # 5 * 200

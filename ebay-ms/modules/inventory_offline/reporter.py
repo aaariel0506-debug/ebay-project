@@ -142,19 +142,63 @@ class InventoryReporter:
             rows = query.limit(limit).all()
 
             # 在 session 关闭前构建 MovementItem，避免 DetachedInstanceError
+            # 同时查询成本：IN/RETURN 从 InboundReceiptItem 查，OUT/ADJUST 用 Product.cost_price
+            from core.models import InboundReceipt, InboundReceiptItem, Product
+            from core.models.inventory import InventoryType
+
+            # 预查询所有相关的 InboundReceiptItem（IN/RETURN 的 cost_price）
+            receipt_nos = [r.related_order for r in rows if r.related_order]
+            cost_by_receipt_sku: dict[tuple[str, str], Decimal] = {}
+            if receipt_nos:
+                items = (
+                    sess.query(InboundReceiptItem)
+                    .join(InboundReceipt, InboundReceipt.id == InboundReceiptItem.receipt_id)
+                    .filter(InboundReceipt.receipt_no.in_(receipt_nos))
+                    .all()
+                )
+                for item in items:
+                    # 获取 receipt_no
+                    receipt = sess.query(InboundReceipt).filter(InboundReceipt.id == item.receipt_id).first()
+                    if receipt:
+                        cost_by_receipt_sku[(receipt.receipt_no, item.sku)] = item.cost_price
+
+            # 预查询 Product.cost_price（OUT/ADJUST 的 fallback）
+            skus = [r.sku for r in rows]
+            product_cost: dict[str, Decimal] = {}
+            if skus:
+                prods = sess.query(Product).filter(Product.sku.in_(skus)).all()
+                for p in prods:
+                    product_cost[p.sku] = p.cost_price
+
             result = []
             for r in rows:
+                # 确定 unit_cost
+                unit_cost: Decimal | None = None
+                movement_type_val = r.type.value
+
+                if movement_type_val in (InventoryType.IN.value, InventoryType.RETURN.value):
+                    # IN/RETURN：从 InboundReceiptItem 查（通过 receipt_no + sku）
+                    if r.related_order:
+                        unit_cost = cost_by_receipt_sku.get((r.related_order, r.sku))
+                elif movement_type_val in (InventoryType.OUT.value, InventoryType.ADJUST.value):
+                    # OUT/ADJUST：用当前 Product 成本作为参考
+                    unit_cost = product_cost.get(r.sku)
+
+                total_cost: Decimal | None = None
+                if unit_cost is not None:
+                    total_cost = unit_cost * r.quantity
+
                 result.append(MovementItem(
                     occurred_at=r.occurred_at,
-                    movement_type=r.type.value,
+                    movement_type=movement_type_val,
                     sku=r.sku,
                     quantity=r.quantity,
                     related_order=r.related_order,
                     location=r.location,
                     operator=r.operator,
                     note=r.note,
-                    unit_cost=None,
-                    total_cost=None,
+                    unit_cost=unit_cost,
+                    total_cost=total_cost,
                 ))
             return result
 
