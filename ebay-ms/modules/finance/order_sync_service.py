@@ -279,50 +279,60 @@ class OrderSyncService:
         """
         为一笔 Order 写入 Transaction 流水（Sale + Fee + Shipping）。
 
-        Transaction 类型：
-        - SALE：正向收款
-        - FEE：eBay 平台费（负数）
-        - SHIPPING：运费（正数）
+        幂等性：每种 TransactionType 独立去重检查，
+        避免同一 (order_id, sku) 下 SALE 存在后 BLOCK FEE/SHIPPING 写入。
         """
-        existing = sess.query(Transaction).filter(
-            Transaction.order_id == order_id,
-            Transaction.sku == sku,
-        ).first()
-        if existing:
-            return  # 已存在，跳过（幂等）
 
         # SALE
         if sale_amount > 0:
-            sess.add(Transaction(
-                order_id=order_id,
-                sku=sku,
-                type=TransactionType.SALE,
-                amount=float(sale_amount),
-                currency=currency,
-                date=order_date,
-            ))
+            has_sale = sess.query(Transaction).filter(
+                Transaction.order_id == order_id,
+                Transaction.sku == sku,
+                Transaction.type == TransactionType.SALE,
+            ).first()
+            if not has_sale:
+                sess.add(Transaction(
+                    order_id=order_id,
+                    sku=sku,
+                    type=TransactionType.SALE,
+                    amount=float(sale_amount),
+                    currency=currency,
+                    date=order_date,
+                ))
 
         # SHIPPING
         if shipping_cost > 0:
-            sess.add(Transaction(
-                order_id=order_id,
-                sku=sku,
-                type=TransactionType.SHIPPING,
-                amount=float(shipping_cost),
-                currency=currency,
-                date=order_date,
-            ))
+            has_shipping = sess.query(Transaction).filter(
+                Transaction.order_id == order_id,
+                Transaction.sku == sku,
+                Transaction.type == TransactionType.SHIPPING,
+            ).first()
+            if not has_shipping:
+                sess.add(Transaction(
+                    order_id=order_id,
+                    sku=sku,
+                    type=TransactionType.SHIPPING,
+                    amount=float(shipping_cost),
+                    currency=currency,
+                    date=order_date,
+                ))
 
         # FEE（eBay fee，负数）
         if fee_amount > 0:
-            sess.add(Transaction(
-                order_id=order_id,
-                sku=sku,
-                type=TransactionType.FEE,
-                amount=float(-fee_amount),
-                currency=currency,
-                date=order_date,
-            ))
+            has_fee = sess.query(Transaction).filter(
+                Transaction.order_id == order_id,
+                Transaction.sku == sku,
+                Transaction.type == TransactionType.FEE,
+            ).first()
+            if not has_fee:
+                sess.add(Transaction(
+                    order_id=order_id,
+                    sku=sku,
+                    type=TransactionType.FEE,
+                    amount=float(-fee_amount),
+                    currency=currency,
+                    date=order_date,
+                ))
 
     def _extract_fee_from_order(self, data: dict, order_id: str) -> Decimal:
         """

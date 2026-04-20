@@ -211,15 +211,22 @@ class TestOrderSyncService:
                     "orderFulfillmentStatus": {"status": "COMPLETED"},
                     "buyerCountry": "US",
                     "shippingAddress": {},
-                    "fulfillmentHrefs": [],
                     "lineItems": [
                         {
                             "sku": sample_product.sku,
                             "quantity": 3,
                             "lineItemCost": {"currency": "USD", "value": "20.00"},
+                            "itemTxSummaries": [
+                                {
+                                    "transactionType": "FEE",
+                                    "amount": {"currency": "USD", "value": "5.00"},
+                                }
+                            ],
                         }
                     ],
-                    "itemTxSummaries": [],
+                    "fulfillmentHrefs": [
+                        {"shippingCost": {"currency": "USD", "value": "3.00"}}
+                    ],
                 }
             ],
         }
@@ -231,11 +238,20 @@ class TestOrderSyncService:
             r1 = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
             assert r1.upserted == 1
 
+            # 第二次 sync：Order 已存在走 update，但 Transaction 幂等检查各自通过
             r2 = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
-            # update 不报错，upserted=1
-            assert r2.upserted == 1
+            assert r2.upserted == 1  # update 不报错
 
-        # 只有一条 Order 记录
+            # Transaction：每种 type 各自只有一条（幂等）
+            for t in [TransactionType.SALE, TransactionType.SHIPPING, TransactionType.FEE]:
+                cnt = db_session.query(Transaction).filter(
+                    Transaction.order_id == "ORD-IDEM-001",
+                    Transaction.sku == sample_product.sku,
+                    Transaction.type == t,
+                ).count()
+                assert cnt == 1, f"{t.value} 应只有 1 条，实际 {cnt}"
+
+        # Order 记录也只有 1 条
         count = db_session.query(Order).filter(
             Order.ebay_order_id == "ORD-IDEM-001"
         ).count()
