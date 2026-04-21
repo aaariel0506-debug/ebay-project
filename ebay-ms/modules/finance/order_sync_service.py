@@ -20,7 +20,7 @@ from typing import Any
 
 from core.database.connection import get_session
 from core.ebay_api.client import EbayClient
-from core.models import Order, OrderItem, OrderStatus, Transaction, TransactionType
+from core.models import Order, OrderItem, OrderStatus, Transaction, TransactionType, set_last_sync
 from loguru import logger as log
 
 # ── 结果 ─────────────────────────────────────────────────────────────────
@@ -99,7 +99,7 @@ class OrderSyncService:
         date_from: datetime,
         date_to: datetime,
         page_size: int = 100,
-    ) -> OrderSyncResult:
+    ) -> tuple[OrderSyncResult, datetime | None]:
         """
         增量拉取指定日期范围的已完成订单。
 
@@ -169,8 +169,23 @@ class OrderSyncService:
             else:
                 page_token = None
 
+        sync_finished_at = datetime.now()
+        last_order_id = None
+        if orders:
+            last_order_id = orders[-1].get("orderId")
+
+        with get_session() as sess:
+            set_last_sync(
+                sess,
+                module="finance",
+                operation="sync_orders",
+                sync_at=sync_finished_at,
+                sync_key=last_order_id,
+            )
+            sess.commit()
+
         log.info(result.summary())
-        return result
+        return result, sync_finished_at
 
     # ── 内部：upsert ───────────────────────────────────────────────────
 
