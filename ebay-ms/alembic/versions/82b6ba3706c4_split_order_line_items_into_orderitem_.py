@@ -128,7 +128,7 @@ def downgrade() -> None:
     op.execute("""
         CREATE TABLE orders (
             ebay_order_id VARCHAR(64) NOT NULL PRIMARY KEY,
-            sku VARCHAR(64) NOT NULL,
+            sku VARCHAR(64),
             sale_price NUMERIC(12, 2) NOT NULL,
             shipping_cost NUMERIC(12, 2) NOT NULL,
             ebay_fee NUMERIC(12, 2) NOT NULL,
@@ -141,6 +141,20 @@ def downgrade() -> None:
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL
         )
+    """)
+    # ★ 关键:从 orders_old 恢复所有订单级字段
+    # （sku 留 NULL,下一步 UPDATE 从 order_items 回填）
+    op.execute("""
+        INSERT INTO orders (
+            ebay_order_id, sale_price, shipping_cost, ebay_fee,
+            buyer_country, status, order_date, ship_date,
+            buyer_name, shipping_address, created_at, updated_at
+        )
+        SELECT
+            ebay_order_id, sale_price, shipping_cost, ebay_fee,
+            buyer_country, status, order_date, ship_date,
+            buyer_name, shipping_address, created_at, updated_at
+        FROM orders_old
     """)
     # 从 order_items 回填 sku（每个 order 取第一条）
     op.execute("""
