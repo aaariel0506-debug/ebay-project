@@ -6,7 +6,16 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
-from core.models import Order, OrderItem, OrderStatus, Product, ProductStatus, Transaction, TransactionType
+from core.models import (
+    ExchangeRate,
+    Order,
+    OrderItem,
+    OrderStatus,
+    Product,
+    ProductStatus,
+    Transaction,
+    TransactionType,
+)
 from modules.finance.order_sync_service import OrderSyncService
 from modules.finance.transaction_service import TransactionService
 
@@ -28,6 +37,15 @@ class TestTransactionService:
 
     @staticmethod
     def _make_order(sess, order_id: str, *, sale_price: str, ebay_fee: str, shipping_cost: str, order_date: datetime | None = None):
+        order_dt = order_date or datetime(2026, 4, 21, 10, 0, 0)
+        existing_rate = sess.query(ExchangeRate).filter(
+            ExchangeRate.rate_date == order_dt.date(),
+            ExchangeRate.from_currency == "USD",
+            ExchangeRate.to_currency == "JPY",
+        ).first()
+        if existing_rate is None:
+            sess.add(ExchangeRate(rate_date=order_dt.date(), from_currency="USD", to_currency="JPY", rate=Decimal("150.000000"), source="csv"))
+            sess.flush()
         order = Order(
             ebay_order_id=order_id,
             sale_price=Decimal(sale_price),
@@ -35,7 +53,7 @@ class TestTransactionService:
             shipping_cost=Decimal(shipping_cost),
             buyer_country="US",
             status=OrderStatus.SHIPPED,
-            order_date=order_date or datetime(2026, 4, 21, 10, 0, 0),
+            order_date=order_dt,
             buyer_name="Tester",
             shipping_address="US",
         )
@@ -104,8 +122,9 @@ class TestTransactionService:
         assert sale is not None
         assert Decimal(str(sale.unit_cost)) == Decimal("30.00")
         assert Decimal(str(sale.total_cost)) == Decimal("30.0000")
-        assert Decimal(str(sale.profit)) == Decimal("70.0000")
-        assert Decimal(str(sale.margin)).quantize(Decimal("0.0001")) == Decimal("0.7000")
+        assert Decimal(str(sale.amount_jpy)) == Decimal("15000.0000")
+        assert Decimal(str(sale.profit)) == Decimal("14970.0000")
+        assert Decimal(str(sale.margin)).quantize(Decimal("0.0001")) == Decimal("0.9980")
 
     def test_rebuild_sale_handles_missing_product(self, db_session):
         self._make_order(db_session, "ORD-MISS", sale_price="50.00", ebay_fee="0", shipping_cost="0")
@@ -266,6 +285,8 @@ class TestTransactionServiceIntegration:
         return client
 
     def test_sync_then_rebuild_preserves_sale_amount_contract(self, db_session):
+        db_session.add(ExchangeRate(rate_date=datetime(2026, 4, 15).date(), from_currency="USD", to_currency="JPY", rate=Decimal("150.000000"), source="csv"))
+        db_session.flush()
         prod = Product(
             sku="SKU-QTY",
             title="Qty Product",
@@ -309,5 +330,6 @@ class TestTransactionServiceIntegration:
         sale_after = db_session.query(Transaction).filter(Transaction.order_id == "ORD-QTY-INT", Transaction.type == TransactionType.SALE).first()
         assert sale_after is not None
         assert Decimal(str(sale_after.amount)) == before_amount
+        assert Decimal(str(sale_after.amount_jpy)) == Decimal("4500.0000")
         assert Decimal(str(sale_after.total_cost)) == Decimal("30.0000")
-        assert Decimal(str(sale_after.profit)) == Decimal("0.0000")
+        assert Decimal(str(sale_after.profit)) == Decimal("4470.0000")

@@ -189,6 +189,17 @@ def run() -> int:
     p_unlinked.add_argument("--since", dest="since", help="YYYY-MM-DD")
     p_unlinked.add_argument("--export", dest="export", help="导出到 xlsx 路径")
 
+    p_backfill = finance_sub.add_parser("backfill-amount-jpy", help="回填 Transaction.amount_jpy")
+    p_backfill.add_argument("--apply", action="store_true")
+    p_backfill.add_argument("--since", dest="since", help="YYYY-MM-DD")
+    p_backfill.add_argument("--batch-size", type=int, default=500)
+
+    currency_p = sub.add_parser("currency", help="汇率模块")
+    currency_sub = currency_p.add_subparsers(dest="currency_cmd", help="子命令")
+    p_currency_import = currency_sub.add_parser("import-csv", help="导入汇率 CSV")
+    p_currency_import.add_argument("csv_path")
+    p_currency_import.add_argument("--dry-run", action="store_true", default=False)
+
     args = parser.parse_args()
 
     if args.module is None:
@@ -205,6 +216,19 @@ def run() -> int:
             return run_inventory_offline_cmd(sys.argv[4:] if len(sys.argv) > 4 else [])
         from api.cli.inventory_online_cli import run_inventory_online_cmd
         return run_inventory_online_cmd(sys.argv[3:] if len(sys.argv) > 3 else [])
+
+    if args.module == "currency":
+        from core.database.connection import get_session
+        from core.utils.currency import import_rates_from_csv
+
+        if args.currency_cmd == "import-csv":
+            sess = get_session()
+            try:
+                result = import_rates_from_csv(sess, args.csv_path, dry_run=args.dry_run)
+            finally:
+                sess.close()
+            print(result)
+            return 0
 
     if args.module == "finance":
         from modules.finance.cost_linker import export_unlinked_xlsx, link_costs, list_unlinked_orders
@@ -256,6 +280,26 @@ def run() -> int:
                 from pathlib import Path
                 n = export_unlinked_xlsx(Path(args.export), since=since)
                 print(f"导出 {n} 条到 {args.export}")
+            return 0
+
+        if args.cmd == "backfill-amount-jpy":
+            from datetime import date as date_type
+
+            from core.database.connection import get_session
+            from scripts.backfill_amount_jpy import backfill_transactions
+
+            since = date_type.fromisoformat(args.since) if args.since else None
+            sess = get_session()
+            try:
+                result = backfill_transactions(
+                    sess,
+                    dry_run=not args.apply,
+                    since=since,
+                    batch_size=args.batch_size,
+                )
+            finally:
+                sess.close()
+            print(result)
             return 0
 
     parser.print_help()

@@ -18,8 +18,10 @@ what OrderSyncService wrote. OrderSyncService is the source of truth.
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 
 from core.models import Order, OrderItem, Product, Transaction, TransactionType
+from core.utils.currency import RateNotFoundError, convert
 from modules.finance.order_sync_service import _decimal
 from sqlalchemy.orm import Session
 
@@ -116,18 +118,41 @@ class TransactionService:
                 unit_cost_val: float | None = (
                     float(product.cost_price) if product and product.cost_price is not None else None
                 )
+                amount_jpy_val: float | None = None
+                exchange_rate_val: float | None = None
+                if order_date is not None:
+                    try:
+                        amount_jpy, rate_used, _actual = convert(
+                            sess,
+                            Decimal(str(amount_val)),
+                            "USD",
+                            "JPY",
+                            order_date.date(),
+                        )
+                        amount_jpy_val = float(amount_jpy)
+                        exchange_rate_val = float(rate_used)
+                    except RateNotFoundError:
+                        pass
                 total_cost_val: float | None = (
                     float(unit_cost_val * qty) if unit_cost_val is not None else None
                 )
-                profit_val: float | None = amount_val - total_cost_val if total_cost_val is not None else None
+                profit_val: float | None = (
+                    amount_jpy_val - total_cost_val
+                    if amount_jpy_val is not None and total_cost_val is not None
+                    else None
+                )
                 margin_val: float | None = (
-                    profit_val / amount_val if profit_val is not None and amount_val != 0 else None
+                    profit_val / amount_jpy_val
+                    if profit_val is not None and amount_jpy_val not in (None, 0)
+                    else None
                 )
                 sess.add(Transaction(
                     order_id=order_id,
                     type=TransactionType.SALE,
                     amount=amount_val,
                     currency="USD",
+                    amount_jpy=amount_jpy_val,
+                    exchange_rate=exchange_rate_val,
                     date=order_date,
                     sku=item.sku,
                     unit_cost=unit_cost_val,
@@ -141,11 +166,24 @@ class TransactionService:
             if order.ebay_fee:
                 fee_dec = _decimal(order.ebay_fee)
                 if fee_dec > 0:
+                    fee_amount_jpy: float | None = None
+                    fee_exchange_rate: float | None = None
+                    if order_date is not None:
+                        try:
+                            converted, rate_used, _actual = convert(
+                                sess, Decimal(str(-fee_dec)), "USD", "JPY", order_date.date()
+                            )
+                            fee_amount_jpy = float(converted)
+                            fee_exchange_rate = float(rate_used)
+                        except RateNotFoundError:
+                            pass
                     sess.add(Transaction(
                         order_id=order_id,
                         type=TransactionType.FEE,
                         amount=float(-fee_dec),
                         currency="USD",
+                        amount_jpy=fee_amount_jpy,
+                        exchange_rate=fee_exchange_rate,
                         date=order_date,
                         sku=None,
                     ))
@@ -155,11 +193,24 @@ class TransactionService:
             if order.shipping_cost:
                 ship_dec = _decimal(order.shipping_cost)
                 if ship_dec > 0:
+                    ship_amount_jpy: float | None = None
+                    ship_exchange_rate: float | None = None
+                    if order_date is not None:
+                        try:
+                            converted, rate_used, _actual = convert(
+                                sess, Decimal(str(ship_dec)), "USD", "JPY", order_date.date()
+                            )
+                            ship_amount_jpy = float(converted)
+                            ship_exchange_rate = float(rate_used)
+                        except RateNotFoundError:
+                            pass
                     sess.add(Transaction(
                         order_id=order_id,
                         type=TransactionType.SHIPPING,
                         amount=float(ship_dec),
                         currency="USD",
+                        amount_jpy=ship_amount_jpy,
+                        exchange_rate=ship_exchange_rate,
                         date=order_date,
                         sku=None,
                     ))

@@ -36,7 +36,7 @@ class Transaction(Base, TimestampMixin):
     )
     amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
-    amount_usd: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    amount_jpy: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
     exchange_rate: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
     date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)

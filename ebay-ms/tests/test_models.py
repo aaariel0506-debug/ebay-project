@@ -98,7 +98,7 @@ class TestTransaction:
         assert "type" in fields
         assert "amount" in fields
         assert "currency" in fields
-        assert "amount_usd" in fields
+        assert "amount_jpy" in fields
 
 
 class _Helper:
@@ -218,7 +218,7 @@ class TestTransactionCrud:
             type=TransactionType.SALE,
             amount=150.00,
             currency="USD",
-            amount_usd=150.00,
+            amount_jpy=150.00,
             note="Test sale",
         )
         with get_session() as s:

@@ -21,6 +21,7 @@ from typing import Any
 from core.database.connection import get_session
 from core.ebay_api.client import EbayClient
 from core.models import Order, OrderItem, OrderStatus, Transaction, TransactionType
+from core.utils.currency import RateNotFoundError, convert
 from loguru import logger as log
 
 # ── 结果 ─────────────────────────────────────────────────────────────────
@@ -379,18 +380,37 @@ class OrderSyncService:
         total_cost_val: float | None = None
         profit_val: float | None = None
         margin_val: float | None = None
-        if sale_amount > 0 and unit_cost is not None:
+        amount_jpy_val: float | None = None
+        exchange_rate_val: float | None = None
+
+        if order_date is not None:
+            try:
+                amount_jpy, rate_used, _actual = convert(
+                    sess,
+                    Decimal(str(sale_amount)),
+                    currency,
+                    "JPY",
+                    order_date.date(),
+                )
+                amount_jpy_val = float(amount_jpy)
+                exchange_rate_val = float(rate_used)
+            except RateNotFoundError:
+                pass
+
+        if unit_cost is not None:
             total_cost_val = float(unit_cost * quantity)
-            profit_val = float(sale_amount) - total_cost_val
-            sale_f = float(sale_amount)
-            if sale_f > 0:
-                margin_val = profit_val / sale_f
+        if amount_jpy_val is not None and total_cost_val is not None:
+            profit_val = amount_jpy_val - total_cost_val
+            if amount_jpy_val > 0:
+                margin_val = profit_val / amount_jpy_val
         sess.add(Transaction(
             order_id=order_id,
             sku=sku,
             type=TransactionType.SALE,
             amount=float(sale_amount),
             currency=currency,
+            amount_jpy=amount_jpy_val,
+            exchange_rate=exchange_rate_val,
             date=order_date,
             unit_cost=float(unit_cost) if unit_cost is not None else None,
             total_cost=total_cost_val,
@@ -413,12 +433,29 @@ class OrderSyncService:
         ).first()
         if has:
             return
+        amount_jpy_val: float | None = None
+        exchange_rate_val: float | None = None
+        if order_date is not None:
+            try:
+                amount_jpy, rate_used, _actual = convert(
+                    sess,
+                    Decimal(str(-fee_amount)),
+                    currency,
+                    "JPY",
+                    order_date.date(),
+                )
+                amount_jpy_val = float(amount_jpy)
+                exchange_rate_val = float(rate_used)
+            except RateNotFoundError:
+                pass
         sess.add(Transaction(
             order_id=order_id,
             sku=None,  # 订单级费用，无 SKU
             type=TransactionType.FEE,
             amount=float(-fee_amount),
             currency=currency,
+            amount_jpy=amount_jpy_val,
+            exchange_rate=exchange_rate_val,
             date=order_date,
         ))
 
@@ -437,12 +474,29 @@ class OrderSyncService:
         ).first()
         if has:
             return
+        amount_jpy_val: float | None = None
+        exchange_rate_val: float | None = None
+        if order_date is not None:
+            try:
+                amount_jpy, rate_used, _actual = convert(
+                    sess,
+                    Decimal(str(shipping_cost)),
+                    currency,
+                    "JPY",
+                    order_date.date(),
+                )
+                amount_jpy_val = float(amount_jpy)
+                exchange_rate_val = float(rate_used)
+            except RateNotFoundError:
+                pass
         sess.add(Transaction(
             order_id=order_id,
             sku=None,  # 订单级运费，无 SKU
             type=TransactionType.SHIPPING,
             amount=float(shipping_cost),
             currency=currency,
+            amount_jpy=amount_jpy_val,
+            exchange_rate=exchange_rate_val,
             date=order_date,
         ))
 

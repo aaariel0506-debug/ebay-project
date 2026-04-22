@@ -1,6 +1,7 @@
 """core.models — 所有 ORM 模型"""
 from core.models.base import Base, TimestampMixin
 from core.models.batch import BatchProgress
+from core.models.exchange_rate import ExchangeRate
 from core.models.inbound import InboundReceipt, InboundReceiptItem, InboundStatus
 from core.models.inventory import Inventory, InventoryType
 from core.models.listing import EbayListing, ListingStatus
@@ -29,6 +30,7 @@ __all__ = [
     "ListingTemplate",
     "BatchProgress",
     "SupplierPriceHistory",
+    "ExchangeRate",
     "InboundReceipt",
     "InboundReceiptItem",
     "InboundStatus",

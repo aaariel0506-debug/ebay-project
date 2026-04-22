@@ -5,12 +5,12 @@ Day 26: OrderSyncService 测试
 """
 
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from itertools import cycle
 from unittest.mock import MagicMock
 
-from core.models import Order, OrderItem, OrderStatus, Transaction, TransactionType
+from core.models import ExchangeRate, Order, OrderItem, OrderStatus, Transaction, TransactionType
 from modules.finance.order_sync_service import (
     OrderSyncService,
     _decimal,
@@ -123,6 +123,9 @@ class TestOrderSyncService:
             ],
         }
 
+        db_session.add(ExchangeRate(rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY", rate=Decimal("150.000000"), source="csv"))
+        db_session.flush()
+
         client = self._mock_client([api_data])
         svc = OrderSyncService(client=client)
 
@@ -160,10 +163,11 @@ class TestOrderSyncService:
         ).first()
         assert tx_sale is not None
         assert tx_sale.amount == 100.0
-        # CostLinker：unit_cost 来自 Product.cost_price，total_cost = unit_cost * qty
-        assert tx_sale.unit_cost == float(sample_product.cost_price)  # 100.0
-        assert tx_sale.total_cost == float(sample_product.cost_price * 2)  # 200.0
-        assert tx_sale.profit == 100.0 - float(sample_product.cost_price * 2)  # -100.0
+        # Day 28: amount 仍是 USD 原币，profit/margin 改为 JPY 本位
+        assert tx_sale.unit_cost == float(sample_product.cost_price)  # 100.0 JPY
+        assert tx_sale.total_cost == float(sample_product.cost_price * 2)  # 200.0 JPY
+        assert tx_sale.amount_jpy == 15000.0
+        assert tx_sale.profit == 15000.0 - float(sample_product.cost_price * 2)
         assert tx_sale.margin is not None
 
     def test_sync_with_fee(self, db_session, sample_product):
