@@ -194,6 +194,15 @@ def run() -> int:
     p_backfill.add_argument("--since", dest="since", help="YYYY-MM-DD")
     p_backfill.add_argument("--batch-size", type=int, default=500)
 
+    p_dashboard = finance_sub.add_parser("dashboard", help="财务总览看板")
+    p_dashboard.add_argument(
+        "--period",
+        choices=["all", "this-month", "this-week", "last-7-days", "last-30-days", "custom"],
+        default="this-month",
+    )
+    p_dashboard.add_argument("--from", dest="date_from", help="YYYY-MM-DD")
+    p_dashboard.add_argument("--to", dest="date_to", help="YYYY-MM-DD (半开上界)")
+
     currency_p = sub.add_parser("currency", help="汇率模块")
     currency_sub = currency_p.add_subparsers(dest="currency_cmd", help="子命令")
     p_currency_import = currency_sub.add_parser("import-csv", help="导入汇率 CSV")
@@ -300,6 +309,39 @@ def run() -> int:
             finally:
                 sess.close()
             print(result)
+            return 0
+
+        if args.cmd == "dashboard":
+            from datetime import datetime
+
+            from core.database.connection import get_session
+            from modules.finance.dashboard import DashboardService, DateRange, format_dashboard
+
+            if args.period == "custom" and (not args.date_from or not args.date_to):
+                parser.error("finance dashboard --period custom requires --from and --to")
+
+            if args.period == "all":
+                date_range = DateRange()
+            elif args.period == "this-month":
+                date_range = DashboardService.this_month()
+            elif args.period == "this-week":
+                date_range = DashboardService.this_week()
+            elif args.period == "last-7-days":
+                date_range = DashboardService.last_n_days(7)
+            elif args.period == "last-30-days":
+                date_range = DashboardService.last_n_days(30)
+            else:
+                date_range = DateRange(
+                    start=datetime.strptime(args.date_from, "%Y-%m-%d"),
+                    end=datetime.strptime(args.date_to, "%Y-%m-%d"),
+                )
+
+            sess = get_session()
+            try:
+                dashboard = DashboardService(sess).compute(date_range=date_range)
+            finally:
+                sess.close()
+            print(format_dashboard(dashboard))
             return 0
 
     parser.print_help()
