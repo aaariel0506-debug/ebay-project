@@ -189,16 +189,6 @@ def run() -> int:
     p_unlinked.add_argument("--since", dest="since", help="YYYY-MM-DD")
     p_unlinked.add_argument("--export", dest="export", help="导出到 xlsx 路径")
 
-    p_report = finance_sub.add_parser("report", help="Transaction 汇总报告（毛利/销售额）")
-    p_report.add_argument(
-        "--period",
-        choices=["daily", "weekly", "monthly"],
-        default="daily",
-        help="汇总周期（默认 daily）",
-    )
-    p_report.add_argument("--year", type=int, dest="year", help="月度报表的年份")
-    p_report.add_argument("--month", type=int, dest="month", help="月度报表的月份")
-
     args = parser.parse_args()
 
     if args.module is None:
@@ -217,42 +207,25 @@ def run() -> int:
         return run_inventory_online_cmd(sys.argv[3:] if len(sys.argv) > 3 else [])
 
     if args.module == "finance":
-        from core.database.connection import get_session
         from modules.finance.cost_linker import export_unlinked_xlsx, link_costs, list_unlinked_orders
         from modules.finance.order_sync_service import OrderSyncService
-        from modules.finance.report import TransactionReport
 
         if args.cmd == "sync-orders":
-            from datetime import datetime as dt
-
-            from core.models import get_last_sync
+            date_from = None
+            date_to = None
+            if not args.full:
+                from datetime import datetime
+                if args.date_from:
+                    date_from = datetime.strptime(args.date_from, "%Y-%m-%d")
+                if args.date_to:
+                    date_to = datetime.strptime(args.date_to, "%Y-%m-%d")
 
             svc = OrderSyncService()
-
-            if args.full:
-                # 全量同步：从 2020-01-01 开始
-                date_from = dt(2020, 1, 1)
-                date_to = dt.now()
-            else:
-                # 增量同步：优先用上次同步时间，否则用命令行参数
-                with get_session() as sess:
-                    last_sync = get_last_sync(sess, "finance", "sync_orders")
-                if last_sync:
-                    date_from = last_sync
-                    print(f"增量同步：从 last_sync_at={last_sync.strftime('%Y-%m-%d %H:%M:%S')} 开始")
-                elif args.date_from:
-                    date_from = dt.strptime(args.date_from, "%Y-%m-%d")
-                else:
-                    date_from = dt(2020, 1, 1)
-
-                date_to = dt.now()
-                if args.date_to:
-                    date_to = dt.strptime(args.date_to, "%Y-%m-%d")
-
-            result, sync_at = svc.sync_orders(date_from=date_from, date_to=date_to)
+            result = svc.sync_orders(
+                date_from=date_from or datetime(2020, 1, 1),
+                date_to=date_to or datetime.now(),
+            )
             print(result.summary())
-            if sync_at:
-                print(f"同步完成时间：{sync_at.strftime('%Y-%m-%d %H:%M:%S')}")
             if result.unlinked_skus:
                 print(f"⚠️  未关联 SKU（Product 表无此 SKU）：{result.unlinked_skus}")
             return 0
@@ -283,33 +256,6 @@ def run() -> int:
                 from pathlib import Path
                 n = export_unlinked_xlsx(Path(args.export), since=since)
                 print(f"导出 {n} 条到 {args.export}")
-            return 0
-
-        if args.cmd == "report":
-            import datetime
-
-            from modules.finance.report import daily_report, monthly_report, weekly_report
-
-            period = getattr(args, "period", "daily")
-            year = getattr(args, "year", datetime.now().year)
-            month = getattr(args, "month", datetime.now().month)
-
-            with get_session() as sess:
-                if period == "daily":
-                    r = daily_report(sess)
-                    rep = TransactionReport(sess)
-                    print(rep.summary_text(r["date_from"], r["date_to"]))
-                elif period == "weekly":
-                    r = weekly_report(sess)
-                    rep = TransactionReport(sess)
-                    print(rep.summary_text(r["date_from"], r["date_to"]))
-                elif period == "monthly":
-                    r = monthly_report(sess, year, month)
-                    from datetime import datetime as dt2
-                    start = dt2(year, month, 1)
-                    end = dt2(year + 1 if month == 12 else year, (month % 12) + 1, 1)
-                    rep = TransactionReport(sess)
-                    print(rep.summary_text(start, end))
             return 0
 
     parser.print_help()

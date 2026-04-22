@@ -127,15 +127,15 @@ class TestOrderSyncService:
         svc = OrderSyncService(client=client)
 
         with self._patched_db_session(db_session):
-            sync_result, _ = svc.sync_orders(
+            result = svc.sync_orders(
                 date_from=datetime(2026, 4, 1),
                 date_to=datetime(2026, 4, 20),
             )
 
-        assert sync_result.total_orders == 1
-        assert sync_result.upserted == 1
-        assert sync_result.skipped == 0
-        assert len(sync_result.errors) == 0
+        assert result.total_orders == 1
+        assert result.upserted == 1
+        assert result.skipped == 0
+        assert len(result.errors) == 0
 
         order = db_session.query(Order).filter(
             Order.ebay_order_id == "ORD-TEST-001"
@@ -198,12 +198,12 @@ class TestOrderSyncService:
         svc = OrderSyncService(client=client)
 
         with self._patched_db_session(db_session):
-            sync_result, _ = svc.sync_orders(
+            result = svc.sync_orders(
                 date_from=datetime(2026, 4, 1),
                 date_to=datetime(2026, 4, 20),
             )
 
-        assert sync_result.upserted == 1
+        assert result.upserted == 1
 
         tx_fee = db_session.query(Transaction).filter(
             Transaction.order_id == "ORD-FEE-001",
@@ -248,12 +248,12 @@ class TestOrderSyncService:
         svc = OrderSyncService(client=client)
 
         with self._patched_db_session(db_session):
-            sync_result, _ = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
-            assert sync_result.upserted == 1
+            r1 = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+            assert r1.upserted == 1
 
             # 第二次 sync：Order 已存在走 update，但 Transaction 幂等检查各自通过
-            sync_result, _ = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
-            assert sync_result.upserted == 1  # update 不报错
+            r2 = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+            assert r2.upserted == 1  # update 不报错
 
             # Transaction：每种 type 各自只有一条（幂等）
             # SALE: per sku (有 sku)
@@ -302,11 +302,11 @@ class TestOrderSyncService:
         svc = OrderSyncService(client=client)
 
         with self._patched_db_session(db_session):
-            sync_result, _ = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+            result = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
 
-        assert sync_result.total_orders == 1
-        assert sync_result.skipped == 1
-        assert sync_result.upserted == 0
+        assert result.total_orders == 1
+        assert result.skipped == 1
+        assert result.upserted == 0
 
     def test_sync_multiple_pages(self, db_session, sample_product):
         """多页分页：第二页有 next link → 继续拉完"""
@@ -359,11 +359,11 @@ class TestOrderSyncService:
         svc = OrderSyncService(client=client)
 
         with self._patched_db_session(db_session):
-            sync_result, _ = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+            result = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
 
-        assert sync_result.total_orders == 2
-        assert sync_result.total_pages == 2
-        assert sync_result.upserted == 2
+        assert result.total_orders == 2
+        assert result.total_pages == 2
+        assert result.upserted == 2
 
         order2 = db_session.query(Order).filter(
             Order.ebay_order_id == "ORD-PAGE2-001"

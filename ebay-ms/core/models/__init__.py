@@ -8,7 +8,6 @@ from core.models.order import Order, OrderItem, OrderStatus
 from core.models.price_history import SupplierPriceHistory
 from core.models.product import Product, ProductStatus
 from core.models.stocktake import Stocktake, StocktakeItem, StocktakeStatus
-from core.models.sync_meta import SyncMeta, get_last_sync, set_last_sync
 from core.models.template import ListingTemplate
 from core.models.transaction import Transaction, TransactionType
 from sqlalchemy.orm import relationship
@@ -36,9 +35,6 @@ __all__ = [
     "Stocktake",
     "StocktakeItem",
     "StocktakeStatus",
-    "SyncMeta",
-    "get_last_sync",
-    "set_last_sync",
 ]
 
 # Product → SupplierPriceHistory 反向关联（在模块加载时设置）
