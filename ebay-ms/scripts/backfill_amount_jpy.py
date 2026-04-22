@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from core.database.connection import get_session
 from core.models import Transaction, TransactionType
+from core.security.audit import AuditLog
 from core.utils.currency import RateNotFoundError, get_exchange_rate
 from sqlalchemy.orm import Session
 
@@ -30,6 +34,7 @@ def backfill_transactions(
     updated = 0
     skipped = 0
     errors = 0
+    audit_batches = 0
 
     rows = query.order_by(Transaction.id).all()
     for start in range(0, len(rows), batch_size):
@@ -63,8 +68,20 @@ def backfill_transactions(
             else:
                 updated += 1
         if not dry_run:
+            sess.add(AuditLog(
+                action="finance.backfill_amount_jpy.batch",
+                operator="system",
+                detail={
+                    "batch_start_id": batch[0].id if batch else None,
+                    "batch_end_id": batch[-1].id if batch else None,
+                    "batch_size": len(batch),
+                    "since": since.isoformat() if since else None,
+                },
+                ip_address=None,
+            ))
             sess.commit()
-    return {"processed": processed, "updated": updated, "skipped": skipped, "errors": errors}
+            audit_batches += 1
+    return {"processed": processed, "updated": updated, "skipped": skipped, "errors": errors, "audit_batches": audit_batches}
 
 
 def backup_db(db_path: str) -> Path:

@@ -25,6 +25,14 @@ def test_fallback_to_previous_day(db_session):
     assert actual == date(2026, 3, 14)
 
 
+def test_fallback_within_7_days(db_session):
+    db_session.add(ExchangeRate(rate_date=date(2026, 3, 8), from_currency="USD", to_currency="JPY", rate=Decimal("148.000000"), source="csv"))
+    db_session.flush()
+    rate, actual = get_exchange_rate(db_session, "USD", "JPY", date(2026, 3, 15))
+    assert rate == Decimal("148.000000")
+    assert actual == date(2026, 3, 8)
+
+
 def test_fallback_beyond_7_days_raises(db_session):
     db_session.add(ExchangeRate(rate_date=date(2026, 3, 1), from_currency="USD", to_currency="JPY", rate=Decimal("150"), source="csv"))
     db_session.flush()
@@ -51,6 +59,22 @@ def test_convert_preserves_decimal_precision(db_session):
     amount, rate, _ = convert(db_session, Decimal("1000"), "JPY", "USD", date(2026, 3, 15))
     assert amount == Decimal("6.680000")
     assert rate == Decimal("0.006680")
+
+
+def test_convert_returns_tuple_amount_rate_date(db_session):
+    db_session.add(ExchangeRate(rate_date=date(2026, 3, 15), from_currency="USD", to_currency="JPY", rate=Decimal("149.850000"), source="csv"))
+    db_session.flush()
+    amount, rate, actual = convert(db_session, Decimal("2"), "USD", "JPY", date(2026, 3, 15))
+    assert amount == Decimal("299.700000")
+    assert rate == Decimal("149.850000")
+    assert actual == date(2026, 3, 15)
+
+
+def test_convert_same_currency_passes_through(db_session):
+    amount, rate, actual = convert(db_session, Decimal("123.45"), "JPY", "JPY", date(2026, 3, 15))
+    assert amount == Decimal("123.45")
+    assert rate == Decimal("1.0")
+    assert actual == date(2026, 3, 15)
 
 
 def test_import_valid_csv_inserts_rows(db_session, tmp_path):

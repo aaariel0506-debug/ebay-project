@@ -2,6 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from core.models import ExchangeRate, Order, OrderStatus, Transaction, TransactionType
+from core.security.audit import AuditLog
 from scripts.backfill_amount_jpy import backfill_transactions
 
 
@@ -29,6 +30,9 @@ def test_backfill_fills_only_null_rows(db_session):
     db_session.flush()
     result = backfill_transactions(db_session, dry_run=False, since=None, batch_size=500)
     assert result["updated"] == 1
+    assert result["audit_batches"] == 1
+    audit = db_session.query(AuditLog).filter(AuditLog.action == "finance.backfill_amount_jpy.batch").one()
+    assert audit.detail["batch_size"] == 1
 
 
 def test_backfill_skips_when_no_rate(db_session):
@@ -59,3 +63,13 @@ def test_backfill_is_idempotent(db_session):
     second = backfill_transactions(db_session, dry_run=False, since=None, batch_size=500)
     assert first["updated"] == 1
     assert second["updated"] == 0
+
+
+def test_backfill_dry_run_does_not_write_audit_log(db_session):
+    db_session.add(ExchangeRate(rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY", rate=Decimal("150"), source="csv"))
+    _order(db_session, "ORD-B6", datetime(2026, 4, 15))
+    db_session.add(Transaction(order_id="ORD-B6", type=TransactionType.FEE, amount=-10, currency="USD", date=datetime(2026, 4, 15)))
+    db_session.flush()
+    result = backfill_transactions(db_session, dry_run=True, since=None, batch_size=500)
+    assert result["audit_batches"] == 0
+    assert db_session.query(AuditLog).count() == 0
