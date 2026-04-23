@@ -228,6 +228,132 @@ class TestTransactionCrud:
             assert txn.type == TransactionType.SALE
 
 
+class TestDay28_5:
+    """Day 28.5: 新字段 total_due_seller_raw + sold_via_ad_campaign 测试"""
+
+    def test_order_has_total_due_seller_raw_field(self, db_session):
+        from decimal import Decimal
+
+        from core.models import Order, OrderStatus
+
+        order = Order(
+            ebay_order_id="ORD-TDS-001",
+            sale_price=Decimal("100.00"),
+            shipping_cost=Decimal("5.00"),
+            ebay_fee=Decimal("10.00"),
+            buyer_country="US",
+            status=OrderStatus.SHIPPED,
+            total_due_seller_raw=Decimal("90.02"),
+        )
+        db_session.add(order)
+        db_session.commit()
+
+        saved = db_session.query(Order).filter(Order.ebay_order_id == "ORD-TDS-001").first()
+        assert saved is not None
+        assert saved.total_due_seller_raw == Decimal("90.02")
+
+        order2 = Order(
+            ebay_order_id="ORD-TDS-002",
+            sale_price=Decimal("100.00"),
+            shipping_cost=Decimal("5.00"),
+            ebay_fee=Decimal("10.00"),
+            buyer_country="US",
+            status=OrderStatus.SHIPPED,
+            total_due_seller_raw=None,
+        )
+        db_session.add(order2)
+        db_session.commit()
+        saved2 = db_session.query(Order).filter(Order.ebay_order_id == "ORD-TDS-002").first()
+        assert saved2.total_due_seller_raw is None
+
+    def test_order_has_sold_via_ad_campaign_field(self, db_session):
+        from core.models import Order, OrderStatus
+
+        order_true = Order(
+            ebay_order_id="ORD-AD-001",
+            sale_price=100.0,
+            shipping_cost=0,
+            ebay_fee=0,
+            buyer_country="US",
+            status=OrderStatus.SHIPPED,
+            sold_via_ad_campaign=True,
+        )
+        db_session.add(order_true)
+        db_session.commit()
+        saved = db_session.query(Order).filter(Order.ebay_order_id == "ORD-AD-001").first()
+        assert saved.sold_via_ad_campaign is True
+
+        order_false = Order(
+            ebay_order_id="ORD-AD-002",
+            sale_price=100.0,
+            shipping_cost=0,
+            ebay_fee=0,
+            buyer_country="US",
+            status=OrderStatus.SHIPPED,
+            sold_via_ad_campaign=False,
+        )
+        db_session.add(order_false)
+        db_session.commit()
+        saved2 = db_session.query(Order).filter(Order.ebay_order_id == "ORD-AD-002").first()
+        assert saved2.sold_via_ad_campaign is False
+
+        order_none = Order(
+            ebay_order_id="ORD-AD-003",
+            sale_price=100.0,
+            shipping_cost=0,
+            ebay_fee=0,
+            buyer_country="US",
+            status=OrderStatus.SHIPPED,
+            sold_via_ad_campaign=None,
+        )
+        db_session.add(order_none)
+        db_session.commit()
+        saved3 = db_session.query(Order).filter(Order.ebay_order_id == "ORD-AD-003").first()
+        assert saved3.sold_via_ad_campaign is None
+
+    def test_alembic_roundtrip_adds_and_removes_new_fields(self, db_session):
+        import sqlite3
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        from core.config.settings import settings
+
+        project_root = Path(__file__).parent.parent
+        db_file = settings.db_path
+
+        def run_alembic(*args):
+            return subprocess.run(
+                [sys.executable, "-m", "alembic", *args],
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        def has_column(col_name):
+            conn = sqlite3.connect(str(db_file))
+            cols = conn.execute("PRAGMA table_info(orders)").fetchall()
+            conn.close()
+            return any(c[1] == col_name for c in cols)
+
+        # upgrade 后应该有新列
+        assert has_column("total_due_seller_raw"), "upgrade 后应该有 total_due_seller_raw 列"
+        assert has_column("sold_via_ad_campaign"), "upgrade 后应该有 sold_via_ad_campaign 列"
+
+        # downgrade -1
+        r = run_alembic("downgrade", "-1")
+        assert r.returncode == 0, f"downgrade failed: {r.stderr}"
+        assert not has_column("total_due_seller_raw"), "downgrade 后 total_due_seller_raw 列应消失"
+        assert not has_column("sold_via_ad_campaign"), "downgrade 后 sold_via_ad_campaign 列应消失"
+
+        # 再 upgrade head
+        r = run_alembic("upgrade", "head")
+        assert r.returncode == 0, f"re-upgrade failed: {r.stderr}"
+        assert has_column("total_due_seller_raw")
+        assert has_column("sold_via_ad_campaign")
+
+
 class TestDay31A:
     """Day 31-A: enum + Order 新字段 + migration 往返测试"""
 

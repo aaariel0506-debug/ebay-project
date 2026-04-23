@@ -272,13 +272,15 @@ class TestTransactionServiceIntegration:
             conn_module.get_session = orig_get
             db_session.commit = orig_commit
 
-    def _mock_client(self, pages: list[dict]):
+    def _mock_client(self, pages: list[dict], *, finances_responses: dict | None = None):
         client = MagicMock()
         pages_iter = iter(pages)
+        finances = finances_responses or {}
 
         def fake_get(path: str, **kwargs):
-            if "finances" in path:
-                return {"transactions": []}
+            if "/sell/finances/v1/transaction" in path:
+                oid = kwargs.get("params", {}).get("orderId", "")
+                return finances.get(oid, {"transactions": []})
             return next(pages_iter)
 
         client.get.side_effect = fake_get
@@ -305,13 +307,18 @@ class TestTransactionServiceIntegration:
                 "orderFulfillmentStatus": {"status": "COMPLETED"},
                 "buyerCountry": "US",
                 "shippingAddress": {},
-                "fulfillmentHrefs": [],
                 "lineItems": [{
                     "sku": "SKU-QTY",
                     "quantity": 3,
                     "lineItemCost": {"currency": "USD", "value": "10.00"},
                 }],
-                "itemTxSummaries": [],
+                "pricingSummary": {
+                    "priceSubtotal": {"value": "30.00", "currency": "USD"},
+                    "total": {"value": "30.00", "currency": "USD"},
+                },
+                "totalMarketplaceFee": {"value": "0", "currency": "USD"},
+                "paymentSummary": {"totalDueSeller": {"value": "0", "currency": "USD"}},
+                "properties": {"soldViaAdCampaign": False},
             }]
         }
 

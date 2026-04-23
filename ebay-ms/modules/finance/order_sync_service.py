@@ -217,19 +217,17 @@ class OrderSyncService:
         api_status = data.get("orderFulfillmentStatus", {}).get("status")
         status = _parse_order_status(api_status)
 
-        # shipping cost（订单级，从第一条 lineItem 的 shippingCostInfo 读，
-        # 或从 fulfillmentHrefs 读）
+        # shipping cost（订单级，从 pricingSummary.deliveryCost 读）
+        # 注：Day 25-27 的代码写 fulfillmentHrefs，但真实响应 fulfillmentHrefs 经常为空数组，
+        # 而 pricingSummary.deliveryCost 是订单级的稳定字段。
         shipping_cost = _decimal(
-            data.get("fulfillmentHrefs", [{}])[0]
-            .get("shippingCost", {})
-            .get("value", 0) if data.get("fulfillmentHrefs") else 0
+            data.get("pricingSummary", {}).get("deliveryCost", {}).get("value", 0)
         )
 
-        # fee / ad_fee / sale_tax（订单级）
-        fees = self._extract_fees_from_order(data, order_id)
-        total_fee = fees["fee"]
-        total_ad_fee = fees["ad_fee"]
-        total_sale_tax = fees["sale_tax"]
+        # fee（订单级）— Day 28.5 只采集 FEE，AD_FEE/SALE_TAX 留给 Day 31-B
+        total_fee = self._extract_fee_from_order(data, order_id)
+        total_ad_fee = Decimal("0")  # Day 31-B 才采集
+        total_sale_tax = Decimal("0")  # Day 31-B 才采集
 
         # ── 计算各 lineItem 的明细 ──────────────────────────────────
         li_data: list[dict] = []
@@ -282,6 +280,13 @@ class OrderSyncService:
                     existing_order.order_date = order_date
                 if buyer_paid_total:
                     existing_order.buyer_paid_total = float(buyer_paid_total)
+                # Day 28.5 新字段：total_due_seller_raw + sold_via_ad_campaign
+                total_due_seller_val = _decimal(
+                    data.get("paymentSummary", {}).get("totalDueSeller", {}).get("value", 0)
+                )
+                sold_via_ad = data.get("properties", {}).get("soldViaAdCampaign", False)
+                existing_order.total_due_seller_raw = float(total_due_seller_val) if total_due_seller_val > 0 else None
+                existing_order.sold_via_ad_campaign = bool(sold_via_ad)
             else:
                 new_order = Order(
                     ebay_order_id=order_id,
@@ -294,6 +299,13 @@ class OrderSyncService:
                     buyer_name=shipping_address.get("recipient", ""),
                     shipping_address=str(shipping_address)[:500],
                     buyer_paid_total=float(buyer_paid_total) if buyer_paid_total else None,
+                    # Day 28.5 新字段：total_due_seller_raw + sold_via_ad_campaign
+                    total_due_seller_raw=(
+                        float(_decimal(data.get("paymentSummary", {}).get("totalDueSeller", {}).get("value", 0)))
+                        if _decimal(data.get("paymentSummary", {}).get("totalDueSeller", {}).get("value", 0)) > 0
+                        else None
+                    ),
+                    sold_via_ad_campaign=bool(data.get("properties", {}).get("soldViaAdCampaign", False)),
                 )
                 sess.add(new_order)
 
@@ -609,55 +621,65 @@ class OrderSyncService:
             date=order_date,
         ))
 
-    def _extract_fees_from_order(self, data: dict, order_id: str) -> dict:
+    # ── 费用提取 ─────────────────────────────────────────────────────
+    # 注：Day 28.5 只修复 FEE 采集。AD_FEE / SALE_TAX 留给 Day 31-B。
+
+    def _extract_fee_from_order(self, data: dict, order_id: str) -> Decimal:
         """
-        从订单响应中提取三类费用。
+        提取订单级平台费（final_value_fee / international_fee / regulatory_fee 等聚合）。
 
-        Returns:
-            {
-                "fee": Decimal,      # 平台费合计
-                "ad_fee": Decimal,  # 广告费合计
-                "sale_tax": Decimal, # 销售税合计
-            }
+        主路径：从 Finances API 抓，domain 是 apiz.ebay.com，path 是 /sell/finances/v1/transaction（单数）。
+        遍历返回的 transactions：
+        - transactionType=SALE 的 orderLineItems[].marketplaceFees[] 里把所有 feeType 累加
+        - 不取 transactionType=NON_SALE_CHARGE（那是广告费，AD_FEE，Day 31-B 才采集）
 
-        所有值都是正数(amount 的符号化在 _write_*_transaction 里做)。
+        备用：Finances API 失败时用 Fulfillment API 的 totalMarketplaceFee.value（聚合值，粒度粗但能拿到）。
         """
-        fee = Decimal("0")
-        ad_fee = Decimal("0")
-        sale_tax = Decimal("0")
+        total_fee = Decimal("0")
 
-        # Path A: order 响应自带的 lineItems[].itemTxSummaries
-        for li in data.get("lineItems", []):
-            for summary in li.get("itemTxSummaries", []):
-                tx_type = summary.get("transactionType")
-                fee_type = summary.get("feeType")
-                amount = _decimal(summary.get("amount", {}).get("value", 0))
-                if tx_type == "FEE":
-                    fee += amount
-                elif tx_type == "NON_SALE_CHARGE" and fee_type == "AD_FEE":
-                    ad_fee += amount
-                elif tx_type == "SALE_TAX":
-                    sale_tax += amount
+        # 主路径：Finances API
+        try:
+            resp = self._client.get(
+                "/sell/finances/v1/transaction",
+                params={"orderId": order_id},
+            )
+            for txn in resp.get("transactions", []):
+                if txn.get("transactionType") != "SALE":
+                    continue
+                for li in txn.get("orderLineItems", []):
+                    for fee in li.get("marketplaceFees", []):
+                        total_fee += _decimal(fee.get("amount", {}).get("value", 0))
+        except Exception as exc:
+            log.debug("Finances API /transaction 查询失败 [{}]: {}", order_id, exc)
 
-        # Path B: 订单级 taxCollectedByEbay(备用路径，仅当 Path A 没抓到 SALE_TAX)
-        if sale_tax == Decimal("0"):
-            for tax_entry in data.get("taxCollectedByEbay", []):
-                tax_amount = _decimal(tax_entry.get("amount", {}).get("value", 0))
-                sale_tax += tax_amount
+        if total_fee > 0:
+            return total_fee
 
-        # Path C: Finances API 补 AD_FEE(如 Path A 没有)
-        if ad_fee == Decimal("0"):
-            try:
-                resp = self._client.get(
-                    "/sell/finances/v1/transactions",
-                    params={"orderId": order_id, "transactionType": "NON_SALE_CHARGE"},
-                )
-                for txn in resp.get("transactions", []):
-                    txn_type = txn.get("transactionType")
-                    txn_fee_type = txn.get("feeType")
-                    if txn_type == "NON_SALE_CHARGE" and txn_fee_type == "AD_FEE":
-                        ad_fee += _decimal(txn.get("amount", {}).get("value", 0))
-            except Exception as exc:
-                log.debug(" Finances API 查询失败 [{}]: {}", order_id, exc)
+        # 备用：Fulfillment API 的聚合值
+        fallback = _decimal(
+            data.get("totalMarketplaceFee", {}).get("value", 0)
+        )
+        if fallback > 0:
+            log.info("[{}] Finances API 未返回 FEE，用 totalMarketplaceFee 兜底: {}", order_id, fallback)
+            return fallback
 
-        return {"fee": fee, "ad_fee": ad_fee, "sale_tax": sale_tax}
+        return total_fee
+
+    def _extract_buyer_paid_total(self, data: dict) -> Decimal | None:
+        """
+        买家实际付款总额 = pricingSummary.total + Σ ebayCollectAndRemitTaxes[].amount
+
+        不含税的 total 在 pricingSummary.total，含税部分在 ebayCollectAndRemitTaxes，
+        两者相加才是买家银行卡真实扣款金额。Day 31-B 守恒不变式 #9 会用这个字段对账。
+
+        如果 pricingSummary 缺失，返回 None（Order.buyer_paid_total 保持 null）。
+
+        Day 31-B 将调用此方法。
+        """
+        price_total_val = data.get("pricingSummary", {}).get("total", {}).get("value")
+        if price_total_val is None:
+            return None
+        total = _decimal(price_total_val)
+        for tax_entry in data.get("ebayCollectAndRemitTaxes", []) or []:
+            total += _decimal(tax_entry.get("amount", {}).get("value", 0))
+        return total

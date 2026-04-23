@@ -60,13 +60,15 @@ def _patched_db_session(db_session):
         db_session.commit = orig_commit
 
 
-def _mock_client(api_data: dict) -> MagicMock:
-    """mock EbayClient,finances 路径返回空"""
+def _mock_client(api_data: dict, *, finances_responses: dict | None = None) -> MagicMock:
+    """mock EbayClient，finances 路径返回指定或空响应"""
     client = MagicMock()
+    finances = finances_responses or {}
 
     def fake_get(path: str, **kwargs):
-        if "finances" in path:
-            return {"transactions": []}
+        if "/sell/finances/v1/transaction" in path:
+            oid = kwargs.get("params", {}).get("orderId", "")
+            return finances.get(oid, {"transactions": []})
         return api_data
 
     client.get.side_effect = fake_get
@@ -115,31 +117,45 @@ def test_bug1_multi_sku_fee_shipping_not_duplicated(db_session):
             "orderFulfillmentStatus": {"status": "COMPLETED"},
             "buyerCountry": "US",
             "shippingAddress": {"country": "US"},
-            # 订单级 shipping = 5
-            "fulfillmentHrefs": [
-                {"shippingCost": {"value": "5.00", "currency": "USD"}}
-            ],
+            # 订单级 shipping = 5（从 pricingSummary.deliveryCost 读）
             "lineItems": [
                 {
                     "sku": "SKU-B1A",
                     "quantity": 1,
                     "lineItemCost": {"currency": "USD", "value": "50.00"},
-                    # 订单级 fee = 10,挂在第一个 line_item 的 itemTxSummaries 下
-                    "itemTxSummaries": [
-                        {"transactionType": "FEE", "amount": {"value": "10.00"}}
-                    ],
                 },
                 {
                     "sku": "SKU-B1B",
                     "quantity": 1,
                     "lineItemCost": {"currency": "USD", "value": "30.00"},
-                    "itemTxSummaries": [],
                 },
             ],
+            "pricingSummary": {
+                "priceSubtotal": {"value": "80.00", "currency": "USD"},
+                "deliveryCost": {"value": "5.00", "currency": "USD"},
+                "total": {"value": "85.00", "currency": "USD"},
+            },
+            "totalMarketplaceFee": {"value": "0", "currency": "USD"},
+            "paymentSummary": {"totalDueSeller": {"value": "0", "currency": "USD"}},
+            "properties": {"soldViaAdCampaign": False},
+        }]
+    }
+    # Finances API 返回 marketplaceFees = 10.00（FVF）
+    finances_data = {
+        "transactions": [{
+            "transactionType": "SALE",
+            "orderId": "ORD-B1",
+            "amount": {"value": "75.00", "currency": "USD"},
+            "orderLineItems": [{
+                "lineItemId": "10001",
+                "marketplaceFees": [
+                    {"feeType": "FINAL_VALUE_FEE", "amount": {"value": "10.00"}}
+                ]
+            }]
         }]
     }
 
-    svc = OrderSyncService(client=_mock_client(api_data))
+    svc = OrderSyncService(client=_mock_client(api_data, finances_responses={"ORD-B1": finances_data}))
     with _patched_db_session(db_session):
         svc.sync_orders(
             date_from=datetime(2026, 4, 1),

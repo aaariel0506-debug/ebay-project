@@ -141,7 +141,7 @@ class TestCurrencyIntegration:
         db_session.add(ExchangeRate(rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY", rate=Decimal("150.000000"), source="csv"))
         db_session.add(Product(sku="SKU-1", title="p", cost_price=Decimal("5000.00"), cost_currency="JPY", status=ProductStatus.ACTIVE, supplier="x"))
         db_session.flush()
-        api_data = {"orders": [{"orderId": "ORD-CUR-1", "creationDate": "2026-04-15T10:00:00Z", "orderFulfillmentStatus": {"status": "COMPLETED"}, "buyerCountry": "US", "shippingAddress": {}, "fulfillmentHrefs": [], "lineItems": [{"sku": "SKU-1", "quantity": 1, "lineItemCost": {"currency": "USD", "value": "100.00"}}], "itemTxSummaries": []}]}
+        api_data = {"orders": [{"orderId": "ORD-CUR-1", "creationDate": "2026-04-15T10:00:00Z", "orderFulfillmentStatus": {"status": "COMPLETED"}, "buyerCountry": "US", "shippingAddress": {}, "lineItems": [{"sku": "SKU-1", "quantity": 1, "lineItemCost": {"currency": "USD", "value": "100.00"}}], "pricingSummary": {"priceSubtotal": {"value": "100.00", "currency": "USD"}, "total": {"value": "100.00", "currency": "USD"}}, "totalMarketplaceFee": {"value": "0", "currency": "USD"}, "paymentSummary": {"totalDueSeller": {"value": "0", "currency": "USD"}}, "properties": {"soldViaAdCampaign": False}}]}
         svc = OrderSyncService(client=self._mock_client([api_data]))
         import core.database.connection as conn_module
         orig = conn_module.get_session
@@ -161,7 +161,7 @@ class TestCurrencyIntegration:
     def test_order_sync_without_rate_leaves_fields_null(self, db_session):
         db_session.add(Product(sku="SKU-2", title="p", cost_price=Decimal("5000.00"), cost_currency="JPY", status=ProductStatus.ACTIVE, supplier="x"))
         db_session.flush()
-        api_data = {"orders": [{"orderId": "ORD-CUR-2", "creationDate": "2026-04-15T10:00:00Z", "orderFulfillmentStatus": {"status": "COMPLETED"}, "buyerCountry": "US", "shippingAddress": {}, "fulfillmentHrefs": [], "lineItems": [{"sku": "SKU-2", "quantity": 1, "lineItemCost": {"currency": "USD", "value": "100.00"}}], "itemTxSummaries": []}]}
+        api_data = {"orders": [{"orderId": "ORD-CUR-2", "creationDate": "2026-04-15T10:00:00Z", "orderFulfillmentStatus": {"status": "COMPLETED"}, "buyerCountry": "US", "shippingAddress": {}, "lineItems": [{"sku": "SKU-2", "quantity": 1, "lineItemCost": {"currency": "USD", "value": "100.00"}}], "pricingSummary": {"priceSubtotal": {"value": "100.00", "currency": "USD"}, "total": {"value": "100.00", "currency": "USD"}}, "totalMarketplaceFee": {"value": "0", "currency": "USD"}, "paymentSummary": {"totalDueSeller": {"value": "0", "currency": "USD"}}, "properties": {"soldViaAdCampaign": False}}]}
         svc = OrderSyncService(client=self._mock_client([api_data]))
         import core.database.connection as conn_module
         orig = conn_module.get_session
@@ -181,7 +181,7 @@ class TestCurrencyIntegration:
         db_session.add(ExchangeRate(rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY", rate=Decimal("150.000000"), source="csv"))
         db_session.add(Product(sku="SKU-3", title="p", cost_price=Decimal("5000.00"), cost_currency="JPY", status=ProductStatus.ACTIVE, supplier="x"))
         db_session.flush()
-        api_data = {"orders": [{"orderId": "ORD-CUR-3", "creationDate": "2026-04-15T10:00:00Z", "orderFulfillmentStatus": {"status": "COMPLETED"}, "buyerCountry": "US", "shippingAddress": {}, "fulfillmentHrefs": [], "lineItems": [{"sku": "SKU-3", "quantity": 1, "lineItemCost": {"currency": "USD", "value": "100.00"}}], "itemTxSummaries": []}]}
+        api_data = {"orders": [{"orderId": "ORD-CUR-3", "creationDate": "2026-04-15T10:00:00Z", "orderFulfillmentStatus": {"status": "COMPLETED"}, "buyerCountry": "US", "shippingAddress": {}, "lineItems": [{"sku": "SKU-3", "quantity": 1, "lineItemCost": {"currency": "USD", "value": "100.00"}}], "pricingSummary": {"priceSubtotal": {"value": "100.00", "currency": "USD"}, "total": {"value": "100.00", "currency": "USD"}}, "totalMarketplaceFee": {"value": "0", "currency": "USD"}, "paymentSummary": {"totalDueSeller": {"value": "0", "currency": "USD"}}, "properties": {"soldViaAdCampaign": False}}]}
         svc = OrderSyncService(client=self._mock_client([api_data]))
         import core.database.connection as conn_module
         orig = conn_module.get_session

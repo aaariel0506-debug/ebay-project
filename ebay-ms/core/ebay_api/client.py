@@ -230,7 +230,11 @@ class EbayClient:
         use_user_token: bool = True,
         retry_count: int = 0,
     ) -> dict[str, Any]:
-        url = f"{settings.ebay_api_url}{path}"
+        # Finances API 使用独立域名 apiz.ebay.com，其它 API 使用 api.ebay.com
+        if path.startswith("/sell/finances/"):
+            url = f"{settings.ebay_finances_url}{path}"
+        else:
+            url = f"{settings.ebay_api_url}{path}"
         req_headers = self._build_headers(headers, use_user_token)
 
         logger.debug("{} {} (retry={})", method, path, retry_count)

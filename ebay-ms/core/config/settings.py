@@ -60,6 +60,13 @@ class Settings(BaseSettings):
             return "https://api.sandbox.ebay.com"
         return "https://api.ebay.com"
 
+    @property
+    def ebay_finances_url(self) -> str:
+        """Finances API 的 base URL（apiz.ebay.com，和 Fulfillment API 不同域）"""
+        if self.EBAY_ENV == "sandbox":
+            return "https://apiz.sandbox.ebay.com"
+        return "https://apiz.ebay.com"
+
 
 # 全局单例
 settings = Settings()

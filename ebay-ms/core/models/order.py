@@ -3,7 +3,7 @@ import enum
 from datetime import datetime
 
 from core.models.base import Base, TimestampMixin
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 
@@ -45,6 +45,14 @@ class Order(Base, TimestampMixin):
     buyer_paid_total: Mapped[float | None] = mapped_column(
         Numeric(12, 2), nullable=True,
         doc="买家实付总额(eBay pricingSummary.total,原币),Day 31-B 对账用",
+    )
+    total_due_seller_raw: Mapped[float | None] = mapped_column(
+        Numeric(12, 2), nullable=True,
+        doc="paymentSummary.totalDueSeller(原币)，卖家到手金额。Day 32+ 精确对账用。",
+    )
+    sold_via_ad_campaign: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True,
+        doc="properties.soldViaAdCampaign，是否为广告订单。Day 31-B AD_FEE 采集 hint。",
     )
 
     # 子表
