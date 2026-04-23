@@ -241,11 +241,8 @@ def run() -> int:
         from core.utils.currency import import_rates_from_csv
 
         if args.currency_cmd == "import-csv":
-            sess = get_session()
-            try:
+            with get_session() as sess:
                 result = import_rates_from_csv(sess, args.csv_path, dry_run=args.dry_run)
-            finally:
-                sess.close()
             print(result)
             return 0
 
@@ -308,16 +305,13 @@ def run() -> int:
             from scripts.backfill_amount_jpy import backfill_transactions
 
             since = date_type.fromisoformat(args.since) if args.since else None
-            sess = get_session()
-            try:
+            with get_session() as sess:
                 result = backfill_transactions(
                     sess,
                     dry_run=not args.apply,
                     since=since,
                     batch_size=args.batch_size,
                 )
-            finally:
-                sess.close()
             print(result)
             return 0
 
