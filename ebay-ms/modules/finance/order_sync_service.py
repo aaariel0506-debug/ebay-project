@@ -208,6 +208,11 @@ class OrderSyncService:
         shipping_address = data.get("shippingAddress", {}) or {}
         buyer_country = shipping_address.get("country") or data.get("buyerCountry")
 
+        # buyer_paid_total（订单级，从 pricingSummary.total 读）
+        buyer_paid_total = _decimal(
+            data.get("pricingSummary", {}).get("total", {}).get("value", 0)
+        )
+
         # order status
         api_status = data.get("orderFulfillmentStatus", {}).get("status")
         status = _parse_order_status(api_status)
@@ -220,8 +225,11 @@ class OrderSyncService:
             .get("value", 0) if data.get("fulfillmentHrefs") else 0
         )
 
-        # fee（订单级）
-        total_fee = self._extract_fee_from_order(data, order_id)
+        # fee / ad_fee / sale_tax（订单级）
+        fees = self._extract_fees_from_order(data, order_id)
+        total_fee = fees["fee"]
+        total_ad_fee = fees["ad_fee"]
+        total_sale_tax = fees["sale_tax"]
 
         # ── 计算各 lineItem 的明细 ──────────────────────────────────
         li_data: list[dict] = []
@@ -272,6 +280,8 @@ class OrderSyncService:
                 existing_order.buyer_country = buyer_country
                 if order_date:
                     existing_order.order_date = order_date
+                if buyer_paid_total:
+                    existing_order.buyer_paid_total = float(buyer_paid_total)
             else:
                 new_order = Order(
                     ebay_order_id=order_id,
@@ -283,6 +293,7 @@ class OrderSyncService:
                     order_date=order_date,
                     buyer_name=shipping_address.get("recipient", ""),
                     shipping_address=str(shipping_address)[:500],
+                    buyer_paid_total=float(buyer_paid_total) if buyer_paid_total else None,
                 )
                 sess.add(new_order)
 
@@ -332,7 +343,7 @@ class OrderSyncService:
                     unit_cost=d["product_cost"],
                 )
 
-            # FEE / SHIPPING：订单级，只写一次（不在循环内）
+            # FEE / SHIPPING / AD_FEE / SALE_TAX：订单级，只写一次（不在循环内）
             if total_fee > 0:
                 self._write_fee_transaction(
                     sess,
@@ -346,6 +357,22 @@ class OrderSyncService:
                     sess,
                     order_id=order_id,
                     shipping_cost=shipping_cost,
+                    order_date=order_date,
+                    currency="USD",
+                )
+            if total_ad_fee > 0:
+                self._write_ad_fee_transaction(
+                    sess,
+                    order_id=order_id,
+                    ad_fee_amount=total_ad_fee,
+                    order_date=order_date,
+                    currency="USD",
+                )
+            if total_sale_tax > 0:
+                self._write_sale_tax_transaction(
+                    sess,
+                    order_id=order_id,
+                    sale_tax_amount=total_sale_tax,
                     order_date=order_date,
                     currency="USD",
                 )
@@ -500,31 +527,137 @@ class OrderSyncService:
             date=order_date,
         ))
 
-    def _extract_fee_from_order(self, data: dict, order_id: str) -> Decimal:
-        """
-        从 order 响应中提取 eBay fee。
+    def _write_ad_fee_transaction(
+        self,
+        sess,
+        order_id: str,
+        ad_fee_amount: Decimal,
+        order_date: datetime | None,
+        currency: str,
+    ):
+        """写 AD_FEE 流水（订单级，每 order_id 只写一条，sku=NULL，符号负数）"""
+        has = sess.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.AD_FEE,
+        ).first()
+        if has:
+            return
+        amount_jpy_val: float | None = None
+        exchange_rate_val: float | None = None
+        if order_date is not None:
+            try:
+                amount_jpy, rate_used, _actual = convert(
+                    sess,
+                    Decimal(str(-ad_fee_amount)),
+                    currency,
+                    "JPY",
+                    order_date.date(),
+                )
+                amount_jpy_val = float(amount_jpy)
+                exchange_rate_val = float(rate_used)
+            except RateNotFoundError:
+                pass
+        sess.add(Transaction(
+            order_id=order_id,
+            sku=None,  # 订单级广告费，无 SKU
+            type=TransactionType.AD_FEE,
+            amount=float(-ad_fee_amount),
+            currency=currency,
+            amount_jpy=amount_jpy_val,
+            exchange_rate=exchange_rate_val,
+            date=order_date,
+        ))
 
-        eBay Fulfillment API 的 order 响应中，
-        lineItems 含有 itemTxSummaries（费用明细）。
-        如果没有，尝试从 /sell/finances/v1/transactions 补全（TODO）。
+    def _write_sale_tax_transaction(
+        self,
+        sess,
+        order_id: str,
+        sale_tax_amount: Decimal,
+        order_date: datetime | None,
+        currency: str,
+    ):
+        """写 SALE_TAX 流水（订单级，每 order_id 只写一条，sku=NULL，符号正数）"""
+        has = sess.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.SALE_TAX,
+        ).first()
+        if has:
+            return
+        amount_jpy_val: float | None = None
+        exchange_rate_val: float | None = None
+        if order_date is not None:
+            try:
+                amount_jpy, rate_used, _actual = convert(
+                    sess,
+                    Decimal(str(sale_tax_amount)),
+                    currency,
+                    "JPY",
+                    order_date.date(),
+                )
+                amount_jpy_val = float(amount_jpy)
+                exchange_rate_val = float(rate_used)
+            except RateNotFoundError:
+                pass
+        sess.add(Transaction(
+            order_id=order_id,
+            sku=None,  # 订单级销售税，无 SKU
+            type=TransactionType.SALE_TAX,
+            amount=float(sale_tax_amount),
+            currency=currency,
+            amount_jpy=amount_jpy_val,
+            exchange_rate=exchange_rate_val,
+            date=order_date,
+        ))
+
+    def _extract_fees_from_order(self, data: dict, order_id: str) -> dict:
         """
-        total_fee = Decimal("0")
+        从订单响应中提取三类费用。
+
+        Returns:
+            {
+                "fee": Decimal,      # 平台费合计
+                "ad_fee": Decimal,  # 广告费合计
+                "sale_tax": Decimal, # 销售税合计
+            }
+
+        所有值都是正数(amount 的符号化在 _write_*_transaction 里做)。
+        """
+        fee = Decimal("0")
+        ad_fee = Decimal("0")
+        sale_tax = Decimal("0")
+
+        # Path A: order 响应自带的 lineItems[].itemTxSummaries
         for li in data.get("lineItems", []):
             for summary in li.get("itemTxSummaries", []):
-                if summary.get("transactionType") == "FEE":
-                    total_fee += _decimal(summary.get("amount", {}).get("value", 0))
-        if total_fee > 0:
-            return total_fee
+                tx_type = summary.get("transactionType")
+                fee_type = summary.get("feeType")
+                amount = _decimal(summary.get("amount", {}).get("value", 0))
+                if tx_type == "FEE":
+                    fee += amount
+                elif tx_type == "NON_SALE_CHARGE" and fee_type == "AD_FEE":
+                    ad_fee += amount
+                elif tx_type == "SALE_TAX":
+                    sale_tax += amount
 
-        # 备用：尝试从 orderId 查 Finances API
-        try:
-            resp = self._client.get(
-                "/sell/finances/v1/transactions",
-                params={"orderId": order_id, "transactionType": "FEE"},
-            )
-            for txn in resp.get("transactions", []):
-                total_fee += _decimal(txn.get("amount", {}).get("value", 0))
-        except Exception as exc:
-            log.debug(" Finances API 查询失败 [{}]: {}", order_id, exc)
+        # Path B: 订单级 taxCollectedByEbay(备用路径，仅当 Path A 没抓到 SALE_TAX)
+        if sale_tax == Decimal("0"):
+            for tax_entry in data.get("taxCollectedByEbay", []):
+                tax_amount = _decimal(tax_entry.get("amount", {}).get("value", 0))
+                sale_tax += tax_amount
 
-        return total_fee
+        # Path C: Finances API 补 AD_FEE(如 Path A 没有)
+        if ad_fee == Decimal("0"):
+            try:
+                resp = self._client.get(
+                    "/sell/finances/v1/transactions",
+                    params={"orderId": order_id, "transactionType": "NON_SALE_CHARGE"},
+                )
+                for txn in resp.get("transactions", []):
+                    txn_type = txn.get("transactionType")
+                    txn_fee_type = txn.get("feeType")
+                    if txn_type == "NON_SALE_CHARGE" and txn_fee_type == "AD_FEE":
+                        ad_fee += _decimal(txn.get("amount", {}).get("value", 0))
+            except Exception as exc:
+                log.debug(" Finances API 查询失败 [{}]: {}", order_id, exc)
+
+        return {"fee": fee, "ad_fee": ad_fee, "sale_tax": sale_tax}
