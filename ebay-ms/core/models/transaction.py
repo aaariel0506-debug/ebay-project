@@ -13,6 +13,9 @@ class TransactionType(enum.StrEnum):
     FEE = "fee"
     SHIPPING = "shipping"
     ADJUSTMENT = "adjustment"
+    AD_FEE = "ad_fee"  # Day 31-B 开始采集
+    SALE_TAX = "sale_tax"  # Day 31-B 开始采集
+    SHIPPING_ACTUAL = "shipping_actual"  # Day 31.5 开始采集
 
 
 class Transaction(Base, TimestampMixin):

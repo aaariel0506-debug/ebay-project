@@ -226,3 +226,132 @@ class TestTransactionCrud:
             s.commit()
             assert txn.id is not None
             assert txn.type == TransactionType.SALE
+
+
+class TestDay31A:
+    """Day 31-A: enum + Order 新字段 + migration 往返测试"""
+
+    def test_transaction_type_enum_has_new_values(self):
+        from core.models import TransactionType
+
+        assert TransactionType.AD_FEE.value == "ad_fee"
+        assert TransactionType.SALE_TAX.value == "sale_tax"
+        assert TransactionType.SHIPPING_ACTUAL.value == "shipping_actual"
+        # 老值不能动
+        assert TransactionType.SALE.value == "sale"
+        assert TransactionType.FEE.value == "fee"
+        assert TransactionType.SHIPPING.value == "shipping"
+        assert TransactionType.REFUND.value == "refund"
+        assert TransactionType.ADJUSTMENT.value == "adjustment"
+
+    def test_order_has_ad_fee_total_field(self, db_session):
+        from decimal import Decimal
+
+        from core.models import Order, OrderStatus
+
+        order = Order(
+            ebay_order_id="ORD-ADFEE-001",
+            sale_price=Decimal("100.00"),
+            shipping_cost=Decimal("0"),
+            ebay_fee=Decimal("0"),
+            buyer_country="US",
+            status=OrderStatus.SHIPPED,
+            ad_fee_total=Decimal("150.00"),
+        )
+        db_session.add(order)
+        db_session.commit()
+
+        saved = db_session.query(Order).filter(Order.ebay_order_id == "ORD-ADFEE-001").first()
+        assert saved is not None
+        assert saved.ad_fee_total == Decimal("150.00")
+
+        order2 = Order(
+            ebay_order_id="ORD-ADFEE-002",
+            sale_price=Decimal("100.00"),
+            shipping_cost=Decimal("0"),
+            ebay_fee=Decimal("0"),
+            buyer_country="US",
+            status=OrderStatus.SHIPPED,
+            ad_fee_total=None,
+        )
+        db_session.add(order2)
+        db_session.commit()
+        saved2 = db_session.query(Order).filter(Order.ebay_order_id == "ORD-ADFEE-002").first()
+        assert saved2.ad_fee_total is None
+
+    def test_order_has_buyer_paid_total_field(self, db_session):
+        from decimal import Decimal
+
+        from core.models import Order, OrderStatus
+
+        order = Order(
+            ebay_order_id="ORD-BP-001",
+            sale_price=Decimal("100.00"),
+            shipping_cost=Decimal("0"),
+            ebay_fee=Decimal("0"),
+            buyer_country="US",
+            status=OrderStatus.SHIPPED,
+            buyer_paid_total=Decimal("200.00"),
+        )
+        db_session.add(order)
+        db_session.commit()
+
+        saved = db_session.query(Order).filter(Order.ebay_order_id == "ORD-BP-001").first()
+        assert saved is not None
+        assert saved.buyer_paid_total == Decimal("200.00")
+
+        order2 = Order(
+            ebay_order_id="ORD-BP-002",
+            sale_price=Decimal("100.00"),
+            shipping_cost=Decimal("0"),
+            ebay_fee=Decimal("0"),
+            buyer_country="US",
+            status=OrderStatus.SHIPPED,
+            buyer_paid_total=None,
+        )
+        db_session.add(order2)
+        db_session.commit()
+        saved2 = db_session.query(Order).filter(Order.ebay_order_id == "ORD-BP-002").first()
+        assert saved2.buyer_paid_total is None
+
+    def test_alembic_roundtrip_adds_and_removes_ad_fee_and_buyer_paid_total(self, db_session):
+        import sqlite3
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        from core.config.settings import settings
+
+        project_root = Path(__file__).parent.parent
+        db_file = settings.db_path
+
+        def run_alembic(*args):
+            return subprocess.run(
+                [sys.executable, "-m", "alembic", *args],
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        def has_column(col_name):
+            conn = sqlite3.connect(str(db_file))
+            cols = conn.execute("PRAGMA table_info(orders)").fetchall()
+            conn.close()
+            return any(c[1] == col_name for c in cols)
+
+        # 当前 migration head 应该有新列
+        assert has_column("ad_fee_total"), "upgrade 后应该有 ad_fee_total 列"
+        assert has_column("buyer_paid_total"), "upgrade 后应该有 buyer_paid_total 列"
+
+        # downgrade -1
+        r = run_alembic("downgrade", "-1")
+        assert r.returncode == 0, f"downgrade failed: {r.stderr}"
+        assert not has_column("ad_fee_total"), "downgrade 后 ad_fee_total 列应消失"
+        assert not has_column("buyer_paid_total"), "downgrade 后 buyer_paid_total 列应消失"
+
+        # 再 upgrade head
+        r = run_alembic("upgrade", "head")
+        assert r.returncode == 0, f"re-upgrade failed: {r.stderr}"
+        assert has_column("ad_fee_total")
+        assert has_column("buyer_paid_total")

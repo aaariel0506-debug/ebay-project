@@ -38,6 +38,14 @@ class Order(Base, TimestampMixin):
     ship_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     buyer_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     shipping_address: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ad_fee_total: Mapped[float | None] = mapped_column(
+        Numeric(12, 2), nullable=True,
+        doc="订单级广告费合计(原币),Day 31-B 守恒不变式用",
+    )
+    buyer_paid_total: Mapped[float | None] = mapped_column(
+        Numeric(12, 2), nullable=True,
+        doc="买家实付总额(eBay pricingSummary.total,原币),Day 31-B 对账用",
+    )
 
     # 子表
     items: Mapped[list["OrderItem"]] = relationship(
