@@ -336,11 +336,8 @@ def run() -> int:
                     end=datetime.strptime(args.date_to, "%Y-%m-%d"),
                 )
 
-            sess = get_session()
-            try:
+            with get_session() as sess:
                 dashboard = DashboardService(sess).compute(date_range=date_range)
-            finally:
-                sess.close()
             print(format_dashboard(dashboard))
             return 0
 
