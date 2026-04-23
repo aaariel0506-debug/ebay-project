@@ -85,21 +85,23 @@ class DashboardService:
         start = end - timedelta(days=n)
         return DateRange(start=start, end=end)
 
-    def compute(self, *, date_range: DateRange | None = None) -> DashboardResult:
+    def compute(
+        self,
+        *,
+        date_range: DateRange | None = None,
+        include_sku_analysis: bool = True,
+        include_order_margin: bool = True,
+    ) -> DashboardResult:
         date_range = date_range or DateRange()
         tx_query = self._sess.query(Transaction)
         order_query = self._sess.query(Order)
-        item_query = self._sess.query(OrderItem)
 
         if date_range.start is not None:
             tx_query = tx_query.filter(Transaction.date >= date_range.start)
             order_query = order_query.filter(Order.order_date >= date_range.start)
-            item_query = item_query.join(Order, OrderItem.order_id == Order.ebay_order_id).filter(Order.order_date >= date_range.start)
         if date_range.end is not None:
             tx_query = tx_query.filter(Transaction.date < date_range.end)
             order_query = order_query.filter(Order.order_date < date_range.end)
-            item_query = item_query.join(Order, OrderItem.order_id == Order.ebay_order_id) if date_range.start is None else item_query
-            item_query = item_query.filter(Order.order_date < date_range.end)
 
         metrics = tx_query.with_entities(
             func.count(Transaction.id),
@@ -120,12 +122,15 @@ class DashboardService:
 
         total_orders = order_query.count()
         avg_order_value = (total_revenue / Decimal(str(total_orders))) if total_orders > 0 else None
-        avg_order_margin = self._compute_avg_order_margin(date_range)
+        avg_order_margin = self._compute_avg_order_margin(date_range) if include_order_margin else None
 
-        top_rows = self._compute_sku_rows(date_range)
-        top_profit = sorted([r for r in top_rows if r.profit_jpy > 0], key=lambda r: r.profit_jpy, reverse=True)[:10]
-        top_loss = sorted([r for r in top_rows if r.profit_jpy < 0], key=lambda r: r.profit_jpy)[:10]
-        top_units = sorted(top_rows, key=lambda r: r.units_sold, reverse=True)[:10]
+        if include_sku_analysis:
+            top_rows = self._compute_sku_rows(date_range)
+            top_profit = sorted([r for r in top_rows if r.profit_jpy > 0], key=lambda r: r.profit_jpy, reverse=True)[:10]
+            top_loss = sorted([r for r in top_rows if r.profit_jpy < 0], key=lambda r: r.profit_jpy)[:10]
+            top_units = sorted(top_rows, key=lambda r: r.units_sold, reverse=True)[:10]
+        else:
+            top_profit, top_loss, top_units = [], [], []
 
         return DashboardResult(
             date_range=date_range,

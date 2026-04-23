@@ -203,6 +203,16 @@ def run() -> int:
     p_dashboard.add_argument("--from", dest="date_from", help="YYYY-MM-DD")
     p_dashboard.add_argument("--to", dest="date_to", help="YYYY-MM-DD (半开上界)")
 
+    p_breakdown = finance_sub.add_parser("breakdown", help="财务时间分解报表")
+    p_breakdown.add_argument("--group-by", choices=["day", "month"], required=True)
+    p_breakdown.add_argument(
+        "--period",
+        choices=["all", "this-month", "this-week", "last-7-days", "last-30-days", "custom"],
+        default="this-month",
+    )
+    p_breakdown.add_argument("--from", dest="date_from", help="YYYY-MM-DD")
+    p_breakdown.add_argument("--to", dest="date_to", help="YYYY-MM-DD (半开上界)")
+
     currency_p = sub.add_parser("currency", help="汇率模块")
     currency_sub = currency_p.add_subparsers(dest="currency_cmd", help="子命令")
     p_currency_import = currency_sub.add_parser("import-csv", help="导入汇率 CSV")
@@ -339,6 +349,41 @@ def run() -> int:
             with get_session() as sess:
                 dashboard = DashboardService(sess).compute(date_range=date_range)
             print(format_dashboard(dashboard))
+            return 0
+
+        if args.cmd == "breakdown":
+            from datetime import datetime
+
+            from core.database.connection import get_session
+            from modules.finance.breakdown import BreakdownService, format_breakdown, resolve_all_range
+            from modules.finance.dashboard import DashboardService, DateRange
+
+            if args.period == "custom" and (not args.date_from or not args.date_to):
+                parser.error("finance breakdown --period custom requires --from and --to")
+
+            with get_session() as sess:
+                if args.period == "all":
+                    date_range = resolve_all_range(sess)
+                    if date_range.start is None or date_range.end is None:
+                        from modules.finance.breakdown import BreakdownResult
+
+                        print(format_breakdown(BreakdownResult(group_by=args.group_by, date_range=date_range, rows=[])))
+                        return 0
+                elif args.period == "this-month":
+                    date_range = DashboardService.this_month()
+                elif args.period == "this-week":
+                    date_range = DashboardService.this_week()
+                elif args.period == "last-7-days":
+                    date_range = DashboardService.last_n_days(7)
+                elif args.period == "last-30-days":
+                    date_range = DashboardService.last_n_days(30)
+                else:
+                    date_range = DateRange(
+                        start=datetime.strptime(args.date_from, "%Y-%m-%d"),
+                        end=datetime.strptime(args.date_to, "%Y-%m-%d"),
+                    )
+                result = BreakdownService(sess).compute(group_by=args.group_by, date_range=date_range)
+            print(format_breakdown(result))
             return 0
 
     parser.print_help()
