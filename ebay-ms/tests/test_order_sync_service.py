@@ -441,7 +441,7 @@ class TestOrderSyncService:
     def test_ad_fee_and_sale_tax_written(self, db_session, sample_product):
         """
         Day 31-B: AD_FEE/SALE_TAX Transaction 写入测试。
-        Day 28.5 阶段：暂不采集，测试改为验证 FEE 正确。
+        AD_FEE 从 NON_SALE_CHARGE 提取（负数符号），SALE_TAX 从 ebayCollectedTaxAmount 提取（正数符号）。
         """
         self._clean_orders(db_session)
         db_session.add(ExchangeRate(
@@ -455,7 +455,7 @@ class TestOrderSyncService:
             order_id, sample_product.sku, quantity=1, unit_price="100.00",
             buyer_paid_total="115.00",
         )
-        # Finances: FEE + AD_FEE(NON_SALE_CHARGE)
+        # Finances: FEE + AD_FEE(NON_SALE_CHARGE) + SALE_TAX(ebayCollectedTaxAmount)
         finances_data = {
             "transactions": [
                 {
@@ -468,6 +468,7 @@ class TestOrderSyncService:
                             {"feeType": "FINAL_VALUE_FEE", "amount": {"value": "13.00"}}
                         ]
                     }],
+                    "ebayCollectedTaxAmount": {"value": "5.00", "currency": "USD"},
                 },
                 {
                     "transactionId": "FEE-AD-001",
@@ -491,7 +492,7 @@ class TestOrderSyncService:
 
         assert result.upserted == 1
 
-        # FEE 应该正确写入（从 Finances API）
+        # FEE 正确写入（从 Finances API SALE transaction）
         tx_fee = db_session.query(Transaction).filter(
             Transaction.order_id == order_id,
             Transaction.type == TransactionType.FEE,
@@ -499,10 +500,32 @@ class TestOrderSyncService:
         assert tx_fee is not None
         assert tx_fee.amount == -13.0
 
+        # AD_FEE 正确写入（负数符号，sku=NULL）
+        tx_ad_fee = db_session.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.AD_FEE,
+        ).first()
+        assert tx_ad_fee is not None
+        assert tx_ad_fee.amount == -10.0
+        assert tx_ad_fee.sku is None
+
+        # SALE_TAX 正确写入（正数符号，sku=NULL）
+        tx_sale_tax = db_session.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.SALE_TAX,
+        ).first()
+        assert tx_sale_tax is not None
+        assert tx_sale_tax.amount == 5.0
+        assert tx_sale_tax.sku is None
+
+        # Order.ad_fee_total 写入
         order = db_session.query(Order).filter(
             Order.ebay_order_id == order_id,
         ).first()
         assert order is not None
+        assert order.ad_fee_total == 10.0
+
+        # buyer_paid_total 包含 taxes
         assert order.buyer_paid_total == 115.0
 
         tx_sale = db_session.query(Transaction).filter(
@@ -513,7 +536,7 @@ class TestOrderSyncService:
         assert tx_sale.amount == 100.0
 
     def test_ad_fee_sale_tax_idempotent(self, db_session, sample_product):
-        """Day 31-B: 幂等性——同一订单多次 sync 不产生重复 Transaction"""
+        """Day 31-B: 幂等性——同一订单多次 sync 不产生重复 Transaction（含 AD_FEE/SALE_TAX）"""
         self._clean_orders(db_session)
         db_session.add(ExchangeRate(
             rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY",
@@ -526,7 +549,28 @@ class TestOrderSyncService:
             order_id, sample_product.sku, quantity=1, unit_price="100.00",
             buyer_paid_total="115.00",
         )
-        finances_data = _make_finances_response(order_id, fee_amount="13.00", sale_amount="100.00")
+        finances_data = {
+            "transactions": [
+                {
+                    "transactionType": "SALE",
+                    "orderId": order_id,
+                    "amount": {"value": "100.00", "currency": "USD"},
+                    "orderLineItems": [{
+                        "lineItemId": "10001",
+                        "marketplaceFees": [
+                            {"feeType": "FINAL_VALUE_FEE", "amount": {"value": "13.00"}}
+                        ]
+                    }],
+                    "ebayCollectedTaxAmount": {"value": "5.00", "currency": "USD"},
+                },
+                {
+                    "transactionId": "FEE-AD-001",
+                    "transactionType": "NON_SALE_CHARGE",
+                    "feeType": "AD_FEE",
+                    "amount": {"value": "10.00", "currency": "USD"},
+                },
+            ]
+        }
 
         client = self._mock_client([api_data], repeat=True,
                                     finances_responses={order_id: finances_data})
@@ -549,15 +593,32 @@ class TestOrderSyncService:
         ).count()
         assert fee_count == 1, f"FEE 应只有 1 条，实际 {fee_count}"
 
+        # AD_FEE 幂等
+        ad_fee_count = db_session.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.AD_FEE,
+        ).count()
+        assert ad_fee_count == 1, f"AD_FEE 应只有 1 条，实际 {ad_fee_count}"
+
+        # SALE_TAX 幂等
+        sale_tax_count = db_session.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.SALE_TAX,
+        ).count()
+        assert sale_tax_count == 1, f"SALE_TAX 应只有 1 条，实际 {sale_tax_count}"
+
     def test_ad_fee_sale_tax_zero_not_written(self, db_session, sample_product):
-        """Day 31-B: 零值 FEE 不写入"""
+        """Day 31-B: 零值 FEE/AD_FEE/SALE_TAX 不写入"""
         self._clean_orders(db_session)
+        order_id = "ORD-ZERO-TAX-001"
         api_data = _make_order_response(
-            "ORD-ZERO-TAX-001", sample_product.sku, quantity=1, unit_price="100.00",
+            order_id, sample_product.sku, quantity=1, unit_price="100.00",
             buyer_paid_total="100.00", total_marketplace_fee="0",
         )
+        # Finances API 返回空（无 fee、无 ad_fee、无 sale_tax）
+        finances_data = {"transactions": []}
 
-        client = self._mock_client([api_data])
+        client = self._mock_client([api_data], finances_responses={order_id: finances_data})
         svc = OrderSyncService(client=client)
 
         with self._patched_db_session(db_session):
@@ -568,10 +629,22 @@ class TestOrderSyncService:
         assert result.upserted == 1
 
         tx_fee = db_session.query(Transaction).filter(
-            Transaction.order_id == "ORD-ZERO-TAX-001",
+            Transaction.order_id == order_id,
             Transaction.type == TransactionType.FEE,
         ).count()
         assert tx_fee == 0, f"fee=0 时不应有 FEE 记录，实际 {tx_fee}"
+
+        tx_ad_fee = db_session.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.AD_FEE,
+        ).count()
+        assert tx_ad_fee == 0, f"ad_fee=0 时不应有 AD_FEE 记录，实际 {tx_ad_fee}"
+
+        tx_sale_tax = db_session.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.SALE_TAX,
+        ).count()
+        assert tx_sale_tax == 0, f"sale_tax=0 时不应有 SALE_TAX 记录，实际 {tx_sale_tax}"
 
     def test_sale_tax_from_tax_collected_by_ebay(self, db_session, sample_product):
         """Day 31-B: FEE fallback 到 totalMarketplaceFee 测试"""
@@ -856,3 +929,205 @@ class TestOrderSyncService:
         order = db_session.query(Order).filter(Order.ebay_order_id == "ORD-AD-001").first()
         assert order is not None
         assert order.sold_via_ad_campaign is True
+
+    # ── Day 31-B 新测试 ───────────────────────────────────────────────
+
+    def test_buyer_paid_total_with_ebay_collect_and_remit_taxes(self, db_session, sample_product):
+        """buyer_paid_total = pricingSummary.total + Σ ebayCollectAndRemitTaxes[].amount"""
+        self._clean_orders(db_session)
+        order_id = "ORD-BPT-001"
+        api_data = {
+            "orders": [{
+                "orderId": order_id,
+                "creationDate": "2026-04-15T10:00:00Z",
+                "orderFulfillmentStatus": {"status": "COMPLETED"},
+                "buyerCountry": "US",
+                "shippingAddress": {},
+                "lineItems": [{"sku": sample_product.sku, "quantity": 1,
+                               "lineItemCost": {"currency": "USD", "value": "100.00"}}],
+                "pricingSummary": {
+                    "priceSubtotal": {"value": "100.00", "currency": "USD"},
+                    "total": {"value": "108.50", "currency": "USD"},
+                    "deliveryCost": {"value": "0", "currency": "USD"},
+                },
+                "totalMarketplaceFee": {"value": "0", "currency": "USD"},
+                "paymentSummary": {"totalDueSeller": {"value": "0", "currency": "USD"}},
+                "properties": {"soldViaAdCampaign": False},
+                "ebayCollectAndRemitTaxes": [
+                    {"amount": {"value": "5.50", "currency": "USD"}},
+                    {"amount": {"value": "3.00", "currency": "USD"}},
+                ],
+            }]
+        }
+
+        client = self._mock_client([api_data])
+        svc = OrderSyncService(client=client)
+
+        with self._patched_db_session(db_session):
+            result = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+
+        assert result.upserted == 1
+        order = db_session.query(Order).filter(Order.ebay_order_id == order_id).first()
+        assert order is not None
+        # buyer_paid_total = 108.50 + 5.50 + 3.00 = 117.00
+        assert order.buyer_paid_total == 117.0
+
+    def test_finances_api_called_once_per_order(self, db_session, sample_product):
+        """Day 31-B: Finances API 同一订单只调用一次（FEE/AD_FEE/SALE_TAX 共享缓存）"""
+        self._clean_orders(db_session)
+        db_session.add(ExchangeRate(
+            rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY",
+            rate=Decimal("150.000000"), source="csv",
+        ))
+        db_session.flush()
+
+        order_id = "ORD-SINGLE-001"
+        api_data = _make_order_response(
+            order_id, sample_product.sku, quantity=1, unit_price="100.00",
+        )
+        finances_data = {
+            "transactions": [
+                {
+                    "transactionType": "SALE",
+                    "orderId": order_id,
+                    "amount": {"value": "87.00", "currency": "USD"},
+                    "orderLineItems": [{
+                        "lineItemId": "10001",
+                        "marketplaceFees": [
+                            {"feeType": "FINAL_VALUE_FEE", "amount": {"value": "13.00"}}
+                        ]
+                    }],
+                    "ebayCollectedTaxAmount": {"value": "5.00", "currency": "USD"},
+                },
+                {
+                    "transactionType": "NON_SALE_CHARGE",
+                    "feeType": "AD_FEE",
+                    "amount": {"value": "10.00", "currency": "USD"},
+                },
+            ]
+        }
+
+        client = self._mock_client([api_data], finances_responses={order_id: finances_data})
+        svc = OrderSyncService(client=client)
+
+        with self._patched_db_session(db_session):
+            result = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+
+        assert result.upserted == 1
+
+        # 检查 client.get 调用次数中 Finances API 的调用
+        # 应该只有 1 次 Finances API 调用（因为 3 个提取共享缓存）
+        finances_calls = [
+            call for call in client.get.call_args_list
+            if "/sell/finances/v1/transaction" in str(call)
+        ]
+        assert len(finances_calls) == 1, (
+            f"Finances API 应只调用 1 次，实际 {len(finances_calls)} 次"
+        )
+
+        # 验证所有数据都正确写入
+        tx_fee = db_session.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.FEE,
+        ).first()
+        assert tx_fee is not None
+        assert tx_fee.amount == -13.0
+
+        tx_ad_fee = db_session.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.AD_FEE,
+        ).first()
+        assert tx_ad_fee is not None
+        assert tx_ad_fee.amount == -10.0
+
+        tx_sale_tax = db_session.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.SALE_TAX,
+        ).first()
+        assert tx_sale_tax is not None
+        assert tx_sale_tax.amount == 5.0
+
+    def test_ad_fee_zero_not_written(self, db_session, sample_product):
+        """Day 31-B: 无 NON_SALE_CHARGE 时不写 AD_FEE Transaction"""
+        self._clean_orders(db_session)
+        db_session.add(ExchangeRate(
+            rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY",
+            rate=Decimal("150.000000"), source="csv",
+        ))
+        db_session.flush()
+
+        order_id = "ORD-NO-ADFEE-001"
+        api_data = _make_order_response(
+            order_id, sample_product.sku, quantity=1, unit_price="50.00",
+            total_marketplace_fee="5.00",
+        )
+        # 没有 NON_SALE_CHARGE transaction
+        finances_data = {
+            "transactions": [{
+                "transactionType": "SALE",
+                "orderId": order_id,
+                "amount": {"value": "45.00", "currency": "USD"},
+                "orderLineItems": [{
+                    "lineItemId": "10001",
+                    "marketplaceFees": [
+                        {"feeType": "FINAL_VALUE_FEE", "amount": {"value": "5.00"}}
+                    ]
+                }],
+            }]
+        }
+
+        client = self._mock_client([api_data], finances_responses={order_id: finances_data})
+        svc = OrderSyncService(client=client)
+
+        with self._patched_db_session(db_session):
+            result = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+
+        assert result.upserted == 1
+
+        ad_fee_count = db_session.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.AD_FEE,
+        ).count()
+        assert ad_fee_count == 0, "无 NON_SALE_CHARGE 时不应有 AD_FEE 记录"
+
+    def test_sale_tax_from_ebay_collected_tax_amount(self, db_session, sample_product):
+        """Day 31-B: SALE_TAX 从 ebayCollectedTaxAmount 提取"""
+        self._clean_orders(db_session)
+        db_session.add(ExchangeRate(
+            rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY",
+            rate=Decimal("150.000000"), source="csv",
+        ))
+        db_session.flush()
+
+        order_id = "ORD-TAX-EXT-001"
+        api_data = _make_order_response(
+            order_id, sample_product.sku, quantity=1, unit_price="100.00",
+        )
+        finances_data = {
+            "transactions": [{
+                "transactionType": "SALE",
+                "orderId": order_id,
+                "amount": {"value": "100.00", "currency": "USD"},
+                "orderLineItems": [{
+                    "lineItemId": "10001",
+                    "marketplaceFees": []
+                }],
+                "ebayCollectedTaxAmount": {"value": "8.75", "currency": "USD"},
+            }]
+        }
+
+        client = self._mock_client([api_data], finances_responses={order_id: finances_data})
+        svc = OrderSyncService(client=client)
+
+        with self._patched_db_session(db_session):
+            result = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+
+        assert result.upserted == 1
+
+        tx_sale_tax = db_session.query(Transaction).filter(
+            Transaction.order_id == order_id,
+            Transaction.type == TransactionType.SALE_TAX,
+        ).first()
+        assert tx_sale_tax is not None
+        assert tx_sale_tax.amount == 8.75
+        assert tx_sale_tax.sku is None
