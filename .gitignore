@@ -49,3 +49,5 @@ coverage/
 # 凭证文件夹
 src/tax-system/data/outputs/orders/
 env-secure.zip
+ebay_tokens.json
+*.env

@@ -121,6 +121,11 @@ class TestInventoryCrud:
         self._clear(Inventory)
         self._clear(Product)
 
+    def teardown_method(self):
+        # 清理本 class 往生产 DB commit 的数据,避免污染后续 test_dashboard / test_breakdown 等
+        self._clear(Inventory)
+        self._clear(Product)
+
     def _clear(self, model):
         with get_session() as s:
             s.query(model).delete()
@@ -151,6 +156,11 @@ class TestOrderCrud:
     """Order CRUD 测试"""
 
     def setup_method(self):
+        self._clear(Order)
+        self._clear(Product)
+
+    def teardown_method(self):
+        # 清理本 class 往生产 DB commit 的数据,避免污染后续测试
         self._clear(Order)
         self._clear(Product)
 
@@ -206,6 +216,11 @@ class TestTransactionCrud:
     """Transaction CRUD 测试"""
 
     def setup_method(self):
+        self._clear(Transaction)
+
+    def teardown_method(self):
+        # 清理本 class 往生产 DB commit 的 Transaction,避免污染后续
+        # test_dashboard / test_breakdown(它们会查 Transaction 表且期望为空)
         self._clear(Transaction)
 
     def _clear(self, model):
@@ -311,21 +326,35 @@ class TestDay28_5:
         saved3 = db_session.query(Order).filter(Order.ebay_order_id == "ORD-AD-003").first()
         assert saved3.sold_via_ad_campaign is None
 
-    def test_alembic_roundtrip_adds_and_removes_new_fields(self, db_session):
+    def test_alembic_roundtrip_adds_and_removes_new_fields(self, tmp_path):
+        """
+        Day 28.5 migration 往返测试。
+
+        用独立 tmp SQLite + DB_DIR/DB_NAME env 覆盖 settings,避免污染生产 DB 和
+        其他测试的 fixture。参照 Day 26.5 Bug 3 的 tmp_path 模式。
+        """
+        import os
         import sqlite3
         import subprocess
         import sys
         from pathlib import Path
 
-        from core.config.settings import settings
-
         project_root = Path(__file__).parent.parent
-        db_file = settings.db_path
+        db_dir = tmp_path
+        db_name = "day28_5_alembic_test.db"
+        db_file = db_dir / db_name
+
+        env = {
+            **os.environ,
+            "DB_DIR": str(db_dir),
+            "DB_NAME": db_name,
+        }
 
         def run_alembic(*args):
             return subprocess.run(
                 [sys.executable, "-m", "alembic", *args],
                 cwd=str(project_root),
+                env=env,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -337,17 +366,22 @@ class TestDay28_5:
             conn.close()
             return any(c[1] == col_name for c in cols)
 
+        # 1. upgrade head
+        r = run_alembic("upgrade", "head")
+        assert r.returncode == 0, f"upgrade head failed: {r.stderr}"
+        assert db_file.exists(), f"临时 DB 未创建: {db_file}"
+
         # upgrade 后应该有新列
         assert has_column("total_due_seller_raw"), "upgrade 后应该有 total_due_seller_raw 列"
         assert has_column("sold_via_ad_campaign"), "upgrade 后应该有 sold_via_ad_campaign 列"
 
-        # downgrade -1
+        # 2. downgrade -1(回到 Day 31-A 的 migration)
         r = run_alembic("downgrade", "-1")
         assert r.returncode == 0, f"downgrade failed: {r.stderr}"
         assert not has_column("total_due_seller_raw"), "downgrade 后 total_due_seller_raw 列应消失"
         assert not has_column("sold_via_ad_campaign"), "downgrade 后 sold_via_ad_campaign 列应消失"
 
-        # 再 upgrade head
+        # 3. 再 upgrade head
         r = run_alembic("upgrade", "head")
         assert r.returncode == 0, f"re-upgrade failed: {r.stderr}"
         assert has_column("total_due_seller_raw")
@@ -440,21 +474,39 @@ class TestDay31A:
         saved2 = db_session.query(Order).filter(Order.ebay_order_id == "ORD-BP-002").first()
         assert saved2.buyer_paid_total is None
 
-    def test_alembic_roundtrip_adds_and_removes_ad_fee_and_buyer_paid_total(self, db_session):
+    def test_alembic_roundtrip_adds_and_removes_ad_fee_and_buyer_paid_total(self, tmp_path):
+        """
+        Day 31-A migration 往返测试。
+
+        用独立 tmp SQLite + DB_DIR/DB_NAME env 覆盖 settings,避免污染生产 DB 和
+        其他测试的 fixture。
+
+        注意:Day 28.5 之后 Day 31-A migration(1f2e3d4c5b6a)不再是 head,
+        所以不能用 `downgrade -1`(那只会回退 Day 28.5)。必须明确 downgrade 到
+        Day 28 的 migration(a1f3c9e7d2b4)才能回退 Day 31-A 的列。
+        """
+        import os
         import sqlite3
         import subprocess
         import sys
         from pathlib import Path
 
-        from core.config.settings import settings
-
         project_root = Path(__file__).parent.parent
-        db_file = settings.db_path
+        db_dir = tmp_path
+        db_name = "day31a_alembic_test.db"
+        db_file = db_dir / db_name
+
+        env = {
+            **os.environ,
+            "DB_DIR": str(db_dir),
+            "DB_NAME": db_name,
+        }
 
         def run_alembic(*args):
             return subprocess.run(
                 [sys.executable, "-m", "alembic", *args],
                 cwd=str(project_root),
+                env=env,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -466,17 +518,23 @@ class TestDay31A:
             conn.close()
             return any(c[1] == col_name for c in cols)
 
-        # 当前 migration head 应该有新列
+        # 1. upgrade head
+        r = run_alembic("upgrade", "head")
+        assert r.returncode == 0, f"upgrade head failed: {r.stderr}"
+        assert db_file.exists(), f"临时 DB 未创建: {db_file}"
+
+        # upgrade head 后应该同时含 Day 31-A 和 Day 28.5 的列
         assert has_column("ad_fee_total"), "upgrade 后应该有 ad_fee_total 列"
         assert has_column("buyer_paid_total"), "upgrade 后应该有 buyer_paid_total 列"
 
-        # downgrade -1
-        r = run_alembic("downgrade", "-1")
+        # 2. downgrade 到 Day 28 migration(Day 31-A 之前)
+        #    这会连带回退 Day 28.5 和 Day 31-A 两个 migration
+        r = run_alembic("downgrade", "a1f3c9e7d2b4")
         assert r.returncode == 0, f"downgrade failed: {r.stderr}"
         assert not has_column("ad_fee_total"), "downgrade 后 ad_fee_total 列应消失"
         assert not has_column("buyer_paid_total"), "downgrade 后 buyer_paid_total 列应消失"
 
-        # 再 upgrade head
+        # 3. 再 upgrade head
         r = run_alembic("upgrade", "head")
         assert r.returncode == 0, f"re-upgrade failed: {r.stderr}"
         assert has_column("ad_fee_total")
