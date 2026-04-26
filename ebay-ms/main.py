@@ -251,10 +251,10 @@ def run() -> int:
         from modules.finance.order_sync_service import OrderSyncService
 
         if args.cmd == "sync-orders":
+            from datetime import datetime
             date_from = None
             date_to = None
             if not args.full:
-                from datetime import datetime
                 if args.date_from:
                     date_from = datetime.strptime(args.date_from, "%Y-%m-%d")
                 if args.date_to:
