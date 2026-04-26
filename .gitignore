@@ -51,3 +51,6 @@ src/tax-system/data/outputs/orders/
 env-secure.zip
 ebay_tokens.json
 *.env
+
+# Day 26.5 / 31-C 教训:patch 文件不进 repo
+*.patch
