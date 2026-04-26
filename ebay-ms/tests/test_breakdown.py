@@ -190,3 +190,44 @@ class TestOutput:
         r = BreakdownService(db_session).compute(group_by="month", date_range=DateRange(datetime(2026, 4, 1), datetime(2026, 5, 1)))
         text = format_breakdown(r)
         assert "(无数据)" in text
+
+
+class TestAdFee:
+    """Day 31-C 新增:AD_FEE 在 breakdown 的呈现。"""
+
+    def test_breakdown_row_has_ad_fee_field(self, db_session):
+        """BreakdownRow.ad_fee_jpy 字段必须存在并正确聚合(取绝对值)。"""
+        _tx(db_session, "O1", TransactionType.SALE, amount_jpy=10000, when=datetime(2026, 4, 15, 10))
+        _tx(db_session, "O1", TransactionType.AD_FEE, amount_jpy=-1500, when=datetime(2026, 4, 15, 10))
+        rows = BreakdownService(db_session).compute(
+            group_by="month", date_range=DateRange(datetime(2026, 4, 1), datetime(2026, 5, 1))
+        ).rows
+        assert len(rows) == 1
+        assert rows[0].ad_fee_jpy == Decimal("1500")
+
+    def test_breakdown_per_period_gross_profit_subtracts_ad_fee(self, db_session):
+        """每个 bucket 的 gross_profit 都要减 AD_FEE,与 dashboard 一致。"""
+        _product(db_session, "SKU1")
+        _order(db_session, "O1", datetime(2026, 4, 15, 10))
+        _item(db_session, "O1", "SKU1", 1, "100")
+        _tx(db_session, "O1", TransactionType.SALE, amount_jpy=10000, total_cost=3000, sku="SKU1", when=datetime(2026, 4, 15, 10))
+        _tx(db_session, "O1", TransactionType.AD_FEE, amount_jpy=-1000, when=datetime(2026, 4, 15, 10))
+        rows = BreakdownService(db_session).compute(
+            group_by="month", date_range=DateRange(datetime(2026, 4, 1), datetime(2026, 5, 1))
+        ).rows
+        # 10000 - 3000 - 0(fee) - 1000(ad_fee) = 6000
+        assert rows[0].gross_profit_jpy == Decimal("6000")
+
+    def test_format_breakdown_contains_adfee_column(self, db_session):
+        """format_breakdown 表头必须含 AdFee 列,夹在 Fee 和 Profit 之间。"""
+        _tx(db_session, "O1", TransactionType.SALE, amount_jpy=1000, when=datetime(2026, 4, 15, 10))
+        r = BreakdownService(db_session).compute(
+            group_by="month", date_range=DateRange(datetime(2026, 4, 1), datetime(2026, 5, 1))
+        )
+        text = format_breakdown(r)
+        assert "AdFee" in text
+        # 列顺序:Fee 在 AdFee 前面,AdFee 在 Profit 前面
+        fee_pos = text.find("Fee ")
+        adfee_pos = text.find("AdFee")
+        profit_pos = text.find("Profit")
+        assert 0 < fee_pos < adfee_pos < profit_pos

@@ -18,9 +18,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 UNCAPTURED_ITEMS: tuple[str, ...] = (
-    "sales_tax",
     "shipping_actual",
-    "ad_fee_possibly_partial",
 )
 
 
@@ -47,6 +45,7 @@ class DashboardResult:
     total_revenue_jpy: Decimal
     total_cost_jpy: Decimal
     total_fee_jpy: Decimal
+    total_ad_fee_jpy: Decimal
     gross_profit_jpy: Decimal
     gross_margin: float | None
     total_orders: int
@@ -108,6 +107,7 @@ class DashboardService:
             func.sum(case((Transaction.type.in_([TransactionType.SALE, TransactionType.SHIPPING, TransactionType.REFUND]), Transaction.amount_jpy), else_=Decimal("0"))),
             func.sum(case((Transaction.type == TransactionType.SALE, Transaction.total_cost), else_=Decimal("0"))),
             func.sum(case((Transaction.type == TransactionType.FEE, func.abs(Transaction.amount_jpy)), else_=Decimal("0"))),
+            func.sum(case((Transaction.type == TransactionType.AD_FEE, func.abs(Transaction.amount_jpy)), else_=Decimal("0"))),
             func.sum(case((Transaction.amount_jpy.is_(None), 1), else_=0)),
         ).one()
 
@@ -115,8 +115,9 @@ class DashboardService:
         total_revenue = Decimal(str(metrics[1] or 0))
         total_cost = Decimal(str(metrics[2] or 0))
         total_fee = Decimal(str(metrics[3] or 0))
-        uncovered = int(metrics[4] or 0)
-        gross_profit = total_revenue - total_cost - total_fee
+        total_ad_fee = Decimal(str(metrics[4] or 0))
+        uncovered = int(metrics[5] or 0)
+        gross_profit = total_revenue - total_cost - total_fee - total_ad_fee
         gross_margin = float(gross_profit / total_revenue) if total_revenue > 0 else None
         coverage_ratio = (total_transactions - uncovered) / total_transactions if total_transactions > 0 else 1.0
 
@@ -137,6 +138,7 @@ class DashboardService:
             total_revenue_jpy=total_revenue,
             total_cost_jpy=total_cost,
             total_fee_jpy=total_fee,
+            total_ad_fee_jpy=total_ad_fee,
             gross_profit_jpy=gross_profit,
             gross_margin=gross_margin,
             total_orders=total_orders,
@@ -163,6 +165,7 @@ class DashboardService:
             order_revenue = Decimal("0")
             order_cost = Decimal("0")
             order_fee = Decimal("0")
+            order_ad_fee = Decimal("0")
             for tx in txs:
                 amount_jpy = Decimal(str(tx.amount_jpy)) if tx.amount_jpy is not None else None
                 if tx.type in (TransactionType.SALE, TransactionType.SHIPPING, TransactionType.REFUND) and amount_jpy is not None:
@@ -171,8 +174,10 @@ class DashboardService:
                     order_cost += Decimal(str(tx.total_cost))
                 if tx.type == TransactionType.FEE and amount_jpy is not None:
                     order_fee += abs(amount_jpy)
+                if tx.type == TransactionType.AD_FEE and amount_jpy is not None:
+                    order_ad_fee += abs(amount_jpy)
             if order_revenue > 0:
-                margins.append((order_revenue - order_cost - order_fee) / order_revenue)
+                margins.append((order_revenue - order_cost - order_fee - order_ad_fee) / order_revenue)
         if not margins:
             return None
         return float(sum(margins, Decimal("0")) / Decimal(str(len(margins))))
@@ -239,6 +244,7 @@ def format_dashboard(result: DashboardResult) -> str:
         f"║ 总收入 : {_fmt_yen(result.total_revenue_jpy)}",
         f"║ 总成本 : {_fmt_yen(result.total_cost_jpy)}",
         f"║ 总手续费 : {_fmt_yen(result.total_fee_jpy)}",
+        f"║ Promoted Listing 费用 : {_fmt_yen(result.total_ad_fee_jpy)}",
         f"║ 毛利润 : {_fmt_yen(result.gross_profit_jpy)}",
         f"║ 毛利率 : {_fmt_pct(result.gross_margin)}",
         "║",
@@ -246,13 +252,16 @@ def format_dashboard(result: DashboardResult) -> str:
         f"║ 平均客单价: {_fmt_yen(result.avg_order_value_jpy)}",
         f"║ 平均利润率: {_fmt_pct(result.avg_order_margin)} (订单级平均,非 sum-based)",
         "║",
-        "║ ⚠️ 未采集项(当前毛利润系统性偏高):",
+        "║ ⚠️ 未采集项(当前毛利润仍偏高):",
     ]
     for item in result.uncaptured_items:
-        lines.append(f"║ - {item}")
+        if item == "shipping_actual":
+            lines.append(f"║ - {item} (实际运费成本,Day 31.5 多源 CSV 导入后采集)")
+        else:
+            lines.append(f"║ - {item}")
     lines.extend(
         [
-            "║ 详见 docs/finance-semantics.md,Day 31 补齐",
+            "║ 详见 docs/finance-semantics.md",
             "║",
             f"║ 流水覆盖 : {result.total_transactions - result.uncovered_transactions} / {result.total_transactions} 条 ({result.coverage_ratio * 100:.2f}%)",
             f"║ 未覆盖 {result.uncovered_transactions} 条(汇率缺失),不计入上述金额",

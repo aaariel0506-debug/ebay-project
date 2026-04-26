@@ -24,6 +24,7 @@ class BreakdownRow:
     revenue_jpy: Decimal
     cost_jpy: Decimal
     fee_jpy: Decimal
+    ad_fee_jpy: Decimal
     gross_profit_jpy: Decimal
     gross_margin: float | None
     total_orders: int
@@ -68,6 +69,7 @@ class BreakdownService:
                     revenue_jpy=dash.total_revenue_jpy,
                     cost_jpy=dash.total_cost_jpy,
                     fee_jpy=dash.total_fee_jpy,
+                    ad_fee_jpy=dash.total_ad_fee_jpy,
                     gross_profit_jpy=dash.gross_profit_jpy,
                     gross_margin=dash.gross_margin,
                     total_orders=dash.total_orders,
@@ -118,13 +120,14 @@ def format_breakdown(result: BreakdownResult) -> str:
     if not result.rows:
         lines.append("║ (无数据)")
     else:
-        headers = ["Period", "Revenue", "Cost", "Fee", "Profit", "Margin", "Orders", "Cov"]
+        headers = ["Period", "Revenue", "Cost", "Fee", "AdFee", "Profit", "Margin", "Orders", "Cov"]
         rendered = [
             [
                 row.period,
                 _fmt_yen(row.revenue_jpy),
                 _fmt_yen(row.cost_jpy),
                 _fmt_yen(row.fee_jpy),
+                _fmt_yen(row.ad_fee_jpy),
                 _fmt_yen(row.gross_profit_jpy),
                 _fmt_pct(row.gross_margin),
                 str(row.total_orders),
@@ -142,10 +145,13 @@ def format_breakdown(result: BreakdownResult) -> str:
             lines.append(f"║ {' '.join(value.ljust(widths[i]) for i, value in enumerate(render_row))}")
     lines.extend([
         "║",
-        "║ ⚠️ 未采集项(当前毛利润系统性偏高):",
+        "║ ⚠️ 未采集项(当前毛利润仍偏高):",
     ])
     for item in result.uncaptured_items:
-        lines.append(f"║ - {item}")
-    lines.append("║ 详见 docs/finance-semantics.md,Day 31 补齐")
+        if item == "shipping_actual":
+            lines.append(f"║ - {item} (实际运费成本,Day 31.5 多源 CSV 导入后采集)")
+        else:
+            lines.append(f"║ - {item}")
+    lines.append("║ 详见 docs/finance-semantics.md")
     lines.append("╚════════════════════════════════════════════════════════════════════╝")
     return "\n".join(lines)

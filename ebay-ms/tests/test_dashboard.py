@@ -94,6 +94,39 @@ class TestAggregateMetrics:
     def test_uncaptured_items_constant_exposed(self, db_session):
         r = DashboardService(db_session).compute()
         assert r.uncaptured_items == UNCAPTURED_ITEMS
+        assert UNCAPTURED_ITEMS == ("shipping_actual",)
+
+    def test_ad_fee_appears_in_total_ad_fee_field(self, db_session):
+        """AD_FEE Transaction 应聚合进 total_ad_fee_jpy(取绝对值)。"""
+        _tx(db_session, "O1", TransactionType.AD_FEE, amount_jpy=-2000)
+        r = DashboardService(db_session).compute()
+        assert r.total_ad_fee_jpy == Decimal("2000")
+
+    def test_ad_fee_subtracts_from_gross_profit(self, db_session):
+        """gross_profit 应减去 ad_fee。"""
+        _product(db_session, "SKU1")
+        _order(db_session, "O1", datetime(2026, 4, 15, 10))
+        _item(db_session, "O1", "SKU1", 1, "100")
+        _tx(db_session, "O1", TransactionType.SALE, amount_jpy=10000, total_cost=3000, sku="SKU1")
+        _tx(db_session, "O1", TransactionType.AD_FEE, amount_jpy=-1000)
+        r = DashboardService(db_session).compute()
+        # 10000 - 3000 - 0(fee) - 1000(ad_fee) = 6000
+        assert r.gross_profit_jpy == Decimal("6000")
+
+    def test_ad_fee_does_not_pollute_total_fee(self, db_session):
+        """AD_FEE 不能进 total_fee_jpy。"""
+        _tx(db_session, "O1", TransactionType.AD_FEE, amount_jpy=-5000)
+        r = DashboardService(db_session).compute()
+        assert r.total_fee_jpy == Decimal("0")
+        assert r.total_ad_fee_jpy == Decimal("5000")
+
+    def test_sale_tax_excluded_from_all_sums(self, db_session):
+        """SALE_TAX 不进任何聚合(同 ADJUSTMENT)。"""
+        _tx(db_session, "O1", TransactionType.SALE_TAX, amount_jpy=800)
+        r = DashboardService(db_session).compute()
+        assert r.total_revenue_jpy == Decimal("0")
+        assert r.total_fee_jpy == Decimal("0")
+        assert r.total_ad_fee_jpy == Decimal("0")
 
 
 class TestDateFilter:
@@ -175,6 +208,15 @@ class TestDerivedMetrics:
         r = DashboardService(db_session).compute()
         assert r.avg_order_margin == 0.5
 
+    def test_avg_order_margin_subtracts_ad_fee(self, db_session):
+        """avg_order_margin 公式也要减 AD_FEE,与 gross_margin 保持一致。"""
+        _order(db_session, "OA", datetime(2026, 4, 15, 10))
+        _tx(db_session, "OA", TransactionType.SALE, amount_jpy=10000, total_cost=3000)
+        _tx(db_session, "OA", TransactionType.AD_FEE, amount_jpy=-2000)
+        r = DashboardService(db_session).compute()
+        # margin = (10000 - 3000 - 0 - 2000) / 10000 = 0.5
+        assert r.avg_order_margin == 0.5
+
 
 class TestCoverageReport:
     def test_coverage_ratio_calculation(self, db_session):
@@ -189,5 +231,13 @@ class TestFormatOutput:
         r = DashboardService(db_session).compute()
         text = format_dashboard(r)
         assert "未采集" in text
-        assert "sales_tax" in text
         assert "shipping_actual" in text
+        assert "Day 31.5" in text
+
+    def test_format_dashboard_contains_promoted_listing_label(self, db_session):
+        """format_dashboard 必须渲染 Promoted Listing 费用 行。"""
+        _tx(db_session, "O1", TransactionType.AD_FEE, amount_jpy=-1500)
+        r = DashboardService(db_session).compute()
+        text = format_dashboard(r)
+        assert "Promoted Listing 费用" in text
+        assert "¥1,500" in text
