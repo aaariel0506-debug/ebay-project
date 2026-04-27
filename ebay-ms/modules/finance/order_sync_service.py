@@ -231,6 +231,9 @@ class OrderSyncService:
         # buyer_paid_total：pricingSummary.total + taxes（Day 31-B 启用）
         buyer_paid_total = self._extract_buyer_paid_total(data)
 
+        # tracking_no：从 shipping_fulfillment 子资源采集（Day 31.5-A）
+        tracking_no = self._fetch_tracking_no(order_id)
+
         # ── 计算各 lineItem 的明细 ──────────────────────────────────
         li_data: list[dict] = []
         unlinked_skus: list[str] = []
@@ -292,6 +295,9 @@ class OrderSyncService:
                 # Day 31-B: AD_FEE 合计写入 Order
                 if total_ad_fee > 0:
                     existing_order.ad_fee_total = float(total_ad_fee)
+                # Day 31.5-A: tracking_no 从 shipping_fulfillment 子资源采集
+                if tracking_no is not None:
+                    existing_order.tracking_no = tracking_no
             else:
                 new_order = Order(
                     ebay_order_id=order_id,
@@ -313,6 +319,8 @@ class OrderSyncService:
                     sold_via_ad_campaign=bool(data.get("properties", {}).get("soldViaAdCampaign", False)),
                     # Day 31-B: AD_FEE 合计写入 Order
                     ad_fee_total=float(total_ad_fee) if total_ad_fee > 0 else None,
+                    # Day 31.5-A: tracking_no 从 shipping_fulfillment 子资源采集
+                    tracking_no=tracking_no,
                 )
                 sess.add(new_order)
 
@@ -627,6 +635,32 @@ class OrderSyncService:
             exchange_rate=exchange_rate_val,
             date=order_date,
         ))
+
+    # ── Tracking 号采集 ──────────────────────────────────────────────
+
+    def _fetch_tracking_no(self, order_id: str) -> str | None:
+        """
+        从 eBay shipping_fulfillment 子资源拉取 tracking 号。
+
+        cpass 场景下返回的是 SpeedPAK 内部 ID(27-28 字符大写字母+数字)。
+        若订单还未发货 / API 返回空 / 调用失败,均返回 None,不抛异常。
+        """
+        try:
+            resp = self._client.get(
+                f"/sell/fulfillment/v1/order/{order_id}/shipping_fulfillment"
+            )
+        except Exception as e:
+            log.info("[tracking] {} shipping_fulfillment 调用失败: {}", order_id, e)
+            return None
+
+        fulfillments = resp.get("fulfillments", []) if resp else []
+        if not fulfillments:
+            return None
+
+        # 取第一个 shipment 的 tracking(业务上一单一包,实际不会有多 shipment)
+        first = fulfillments[0]
+        tracking = first.get("shipmentTrackingNumber")
+        return tracking if tracking else None
 
     # ── Finances API 缓存 ──────────────────────────────────────────
 

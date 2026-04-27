@@ -36,6 +36,10 @@ class Order(Base, TimestampMixin):
     )
     order_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ship_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    tracking_no: Mapped[str | None] = mapped_column(
+        String(64), nullable=True,
+        doc="承运商 tracking 号(cpass 场景下为 SpeedPAK 内部 ID)",
+    )
     buyer_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     shipping_address: Mapped[str | None] = mapped_column(String(512), nullable=True)
     ad_fee_total: Mapped[float | None] = mapped_column(

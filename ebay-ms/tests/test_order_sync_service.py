@@ -124,20 +124,34 @@ class TestOrderSyncService:
             db_session.commit = orig_commit
 
     def _mock_client(self, pages: list[dict], *, repeat: bool = False,
-                     finances_responses: dict | None = None):
+                     finances_responses: dict | None = None,
+                     shipping_fulfillment_responses: dict | None = None):
         """
         构造 mock EbayClient。
 
         finances_responses: dict mapping order_id → finances API response
+        shipping_fulfillment_responses: dict mapping order_id → shipping fulfillment API response
         """
         client = MagicMock()
         pages_iter = cycle(pages) if repeat else iter(pages)
         finances = finances_responses or {}
+        shipping_fulfillments = shipping_fulfillment_responses or {}
 
         def fake_get(path: str, **kwargs):
             if "/sell/finances/v1/transaction" in path:
                 oid = kwargs.get("params", {}).get("orderId", "")
                 return finances.get(oid, {"transactions": []})
+            if "/shipping_fulfillment" in path:
+                # extract order_id from path like /sell/fulfillment/v1/order/{orderId}/shipping_fulfillment
+                parts = path.split("/order/")
+                if len(parts) == 2:
+                    oid = parts[1].replace("/shipping_fulfillment", "")
+                else:
+                    oid = ""
+                if oid in shipping_fulfillments:
+                    return shipping_fulfillments[oid]
+                # default: no fulfillments
+                return {"fulfillments": []}
             page = next(pages_iter)
             # wrap single order dicts in {"orders": [...]} for sync_orders
             if isinstance(page, dict) and "orders" not in page:
@@ -1131,3 +1145,244 @@ class TestOrderSyncService:
         assert tx_sale_tax is not None
         assert tx_sale_tax.amount == 8.75
         assert tx_sale_tax.sku is None
+
+    # ── Day 31.5-A: tracking_no 采集测试 ──────────────────────────────
+
+    def test_tracking_no_fetched_from_shipping_fulfillment(self, db_session, sample_product):
+        """正常情况: shipping_fulfillment 返回 tracking, 应写入 Order.tracking_no。"""
+        self._clean_orders(db_session)
+        db_session.add(ExchangeRate(
+            rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY",
+            rate=Decimal("150.000000"), source="csv",
+        ))
+        db_session.flush()
+
+        order_id = "ORD-TRACK-001"
+        api_data = _make_order_response(
+            order_id, sample_product.sku, quantity=1, unit_price="100.00",
+        )
+        shipping_fulfillments = {
+            order_id: {
+                "fulfillments": [{
+                    "shipmentTrackingNumber": "EE10130922016UN06010906D0N",
+                }]
+            }
+        }
+
+        client = self._mock_client(
+            [api_data],
+            shipping_fulfillment_responses=shipping_fulfillments,
+        )
+        svc = OrderSyncService(client=client)
+
+        with self._patched_db_session(db_session):
+            result = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+
+        assert result.upserted == 1
+        order = db_session.query(Order).filter(
+            Order.ebay_order_id == order_id
+        ).first()
+        assert order is not None
+        assert order.tracking_no == "EE10130922016UN06010906D0N"
+
+    def test_tracking_no_none_when_fulfillments_empty(self, db_session, sample_product):
+        """shipping_fulfillment 返回空 fulfillments 数组 → tracking_no=None。"""
+        self._clean_orders(db_session)
+        db_session.add(ExchangeRate(
+            rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY",
+            rate=Decimal("150.000000"), source="csv",
+        ))
+        db_session.flush()
+
+        order_id = "ORD-TRACK-002"
+        api_data = _make_order_response(
+            order_id, sample_product.sku, quantity=1, unit_price="100.00",
+        )
+        shipping_fulfillments = {
+            order_id: {"fulfillments": []}
+        }
+
+        client = self._mock_client(
+            [api_data],
+            shipping_fulfillment_responses=shipping_fulfillments,
+        )
+        svc = OrderSyncService(client=client)
+
+        with self._patched_db_session(db_session):
+            result = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+
+        assert result.upserted == 1
+        order = db_session.query(Order).filter(
+            Order.ebay_order_id == order_id
+        ).first()
+        assert order is not None
+        assert order.tracking_no is None
+
+    def test_tracking_no_none_when_fulfillment_api_fails(self, db_session, sample_product):
+        """shipping_fulfillment 调用抛异常 → tracking_no=None, 主流程不受影响。"""
+        self._clean_orders(db_session)
+        db_session.add(ExchangeRate(
+            rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY",
+            rate=Decimal("150.000000"), source="csv",
+        ))
+        db_session.flush()
+
+        order_id = "ORD-TRACK-003"
+        api_data = _make_order_response(
+            order_id, sample_product.sku, quantity=1, unit_price="100.00",
+        )
+
+        client = MagicMock()
+        call_count = {"total": 0}
+
+        def fake_get(path, **kwargs):
+            call_count["total"] += 1
+            if "/shipping_fulfillment" in path:
+                raise Exception("API connection timeout")
+            if "/sell/finances/v1/transaction" in path:
+                return {"transactions": []}
+            # main order response
+            return {"orders": [api_data]}
+
+        client.get.side_effect = fake_get
+        svc = OrderSyncService(client=client)
+
+        with self._patched_db_session(db_session):
+            result = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+
+        assert result.upserted == 1
+        assert len(result.errors) == 0  # 主流程无错误
+        order = db_session.query(Order).filter(
+            Order.ebay_order_id == order_id
+        ).first()
+        assert order is not None
+        assert order.tracking_no is None
+
+    def test_tracking_no_none_when_no_tracking_field(self, db_session, sample_product):
+        """fulfillments 有但没 shipmentTrackingNumber → None。"""
+        self._clean_orders(db_session)
+        db_session.add(ExchangeRate(
+            rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY",
+            rate=Decimal("150.000000"), source="csv",
+        ))
+        db_session.flush()
+
+        order_id = "ORD-TRACK-004"
+        api_data = _make_order_response(
+            order_id, sample_product.sku, quantity=1, unit_price="100.00",
+        )
+        shipping_fulfillments = {
+            order_id: {
+                "fulfillments": [{
+                    "shipmentTrackingNumber": None,
+                }]
+            }
+        }
+
+        client = self._mock_client(
+            [api_data],
+            shipping_fulfillment_responses=shipping_fulfillments,
+        )
+        svc = OrderSyncService(client=client)
+
+        with self._patched_db_session(db_session):
+            result = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+
+        assert result.upserted == 1
+        order = db_session.query(Order).filter(
+            Order.ebay_order_id == order_id
+        ).first()
+        assert order is not None
+        assert order.tracking_no is None
+
+    def test_tracking_no_takes_first_shipment(self, db_session, sample_product):
+        """fulfillments 有 2 条 → 取第一条的 tracking(业务约定)。"""
+        self._clean_orders(db_session)
+        db_session.add(ExchangeRate(
+            rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY",
+            rate=Decimal("150.000000"), source="csv",
+        ))
+        db_session.flush()
+
+        order_id = "ORD-TRACK-005"
+        api_data = _make_order_response(
+            order_id, sample_product.sku, quantity=1, unit_price="100.00",
+        )
+        shipping_fulfillments = {
+            order_id: {
+                "fulfillments": [
+                    {"shipmentTrackingNumber": "EE1111111111FIRST"},
+                    {"shipmentTrackingNumber": "EE2222222222SECOND"},
+                ]
+            }
+        }
+
+        client = self._mock_client(
+            [api_data],
+            shipping_fulfillment_responses=shipping_fulfillments,
+        )
+        svc = OrderSyncService(client=client)
+
+        with self._patched_db_session(db_session):
+            result = svc.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+
+        assert result.upserted == 1
+        order = db_session.query(Order).filter(
+            Order.ebay_order_id == order_id
+        ).first()
+        assert order is not None
+        assert order.tracking_no == "EE1111111111FIRST"
+
+    def test_resync_overwrites_tracking_no(self, db_session, sample_product):
+        """订单第一次 sync tracking=None, 第二次 sync 有 tracking → 应被更新到 DB。"""
+        self._clean_orders(db_session)
+        db_session.add(ExchangeRate(
+            rate_date=date(2026, 4, 15), from_currency="USD", to_currency="JPY",
+            rate=Decimal("150.000000"), source="csv",
+        ))
+        db_session.flush()
+
+        order_id = "ORD-TRACK-006"
+        api_data = _make_order_response(
+            order_id, sample_product.sku, quantity=1, unit_price="100.00",
+        )
+
+        # 第一次 sync: 无 shipping fulfillment → tracking_no = None
+        client1 = self._mock_client(
+            [api_data],
+            shipping_fulfillment_responses={},  # 空 = 无 fulfillments
+        )
+        svc1 = OrderSyncService(client=client1)
+        with self._patched_db_session(db_session):
+            result1 = svc1.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+        assert result1.upserted == 1
+
+        # 验证第一次 sync 后 tracking_no 为 None
+        order_after_first = db_session.query(Order).filter(
+            Order.ebay_order_id == order_id
+        ).first()
+        assert order_after_first is not None
+        assert order_after_first.tracking_no is None
+
+        # 第二次 sync: 有 shipping fulfillment → tracking_no 应被更新
+        client2 = self._mock_client(
+            [api_data],
+            shipping_fulfillment_responses={
+                order_id: {
+                    "fulfillments": [{
+                        "shipmentTrackingNumber": "EE9999RESYNC999",
+                    }]
+                }
+            },
+        )
+        svc2 = OrderSyncService(client=client2)
+        with self._patched_db_session(db_session):
+            result2 = svc2.sync_orders(datetime(2026, 4, 1), datetime(2026, 4, 20))
+        assert result2.upserted == 1
+
+        # 重新查询 Order 验证 tracking_no 被更新
+        db_session.expire_all()
+        order_after_second = db_session.query(Order).filter(
+            Order.ebay_order_id == order_id
+        ).first()
+        assert order_after_second.tracking_no == "EE9999RESYNC999"
