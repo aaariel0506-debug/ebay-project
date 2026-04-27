@@ -94,7 +94,7 @@ class TestAggregateMetrics:
     def test_uncaptured_items_constant_exposed(self, db_session):
         r = DashboardService(db_session).compute()
         assert r.uncaptured_items == UNCAPTURED_ITEMS
-        assert UNCAPTURED_ITEMS == ("shipping_actual",)
+        assert UNCAPTURED_ITEMS == ()
 
     def test_ad_fee_appears_in_total_ad_fee_field(self, db_session):
         """AD_FEE Transaction 应聚合进 total_ad_fee_jpy(取绝对值)。"""
@@ -230,9 +230,7 @@ class TestFormatOutput:
     def test_format_dashboard_contains_uncaptured_warning(self, db_session):
         r = DashboardService(db_session).compute()
         text = format_dashboard(r)
-        assert "未采集" in text
-        assert "shipping_actual" in text
-        assert "Day 31.5" in text
+        assert "已采集" in text
 
     def test_format_dashboard_contains_promoted_listing_label(self, db_session):
         """format_dashboard 必须渲染 Promoted Listing 费用 行。"""
@@ -241,3 +239,42 @@ class TestFormatOutput:
         text = format_dashboard(r)
         assert "Promoted Listing 费用" in text
         assert "¥1,500" in text
+
+
+class TestShippingActual:
+    def test_shipping_actual_appears_in_total_field(self, db_session):
+        _tx(db_session, "O1", TransactionType.SHIPPING_ACTUAL, amount_jpy=2200)
+        r = DashboardService(db_session).compute()
+        assert r.total_shipping_actual_jpy == Decimal("2200")
+
+    def test_shipping_actual_subtracts_from_gross_profit(self, db_session):
+        _product(db_session, "SKU1")
+        _order(db_session, "O1", datetime(2026, 4, 15, 10))
+        _item(db_session, "O1", "SKU1", 1, "100")
+        _tx(db_session, "O1", TransactionType.SALE, amount_jpy=10000, total_cost=3000, sku="SKU1")
+        _tx(db_session, "O1", TransactionType.SHIPPING_ACTUAL, amount_jpy=1200)
+        r = DashboardService(db_session).compute()
+        assert r.gross_profit_jpy == Decimal("5800")
+
+    def test_shipping_actual_does_not_pollute_total_fee(self, db_session):
+        _tx(db_session, "O1", TransactionType.SHIPPING_ACTUAL, amount_jpy=5000)
+        r = DashboardService(db_session).compute()
+        assert r.total_fee_jpy == Decimal("0")
+        assert r.total_shipping_actual_jpy == Decimal("5000")
+
+    def test_avg_order_margin_subtracts_shipping_actual(self, db_session):
+        _order(db_session, "OA", datetime(2026, 4, 15, 10))
+        _tx(db_session, "OA", TransactionType.SALE, amount_jpy=10000, total_cost=3000)
+        _tx(db_session, "OA", TransactionType.SHIPPING_ACTUAL, amount_jpy=2000)
+        r = DashboardService(db_session).compute()
+        assert r.avg_order_margin == 0.5
+
+    def test_format_dashboard_contains_shipping_actual_line(self, db_session):
+        _tx(db_session, "O1", TransactionType.SHIPPING_ACTUAL, amount_jpy=1500)
+        text = format_dashboard(DashboardService(db_session).compute())
+        assert "实际运费成本" in text
+        assert "¥1,500" in text
+
+    def test_format_dashboard_shows_all_collected_when_uncaptured_empty(self, db_session):
+        text = format_dashboard(DashboardService(db_session).compute())
+        assert "✅ 所有费用项已采集" in text

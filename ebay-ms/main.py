@@ -213,6 +213,10 @@ def run() -> int:
     p_breakdown.add_argument("--from", dest="date_from", help="YYYY-MM-DD")
     p_breakdown.add_argument("--to", dest="date_to", help="YYYY-MM-DD (半开上界)")
 
+    p_imp_ship = finance_sub.add_parser("import-shipping", help="导入 cpass 运费明细 xlsx")
+    p_imp_ship.add_argument("--file", required=True, help="cpass运单费用明细.xlsx 路径")
+    p_imp_ship.add_argument("--dry-run", action="store_true", default=False, help="模拟运行,不写 DB")
+
     currency_p = sub.add_parser("currency", help="汇率模块")
     currency_sub = currency_p.add_subparsers(dest="currency_cmd", help="子命令")
     p_currency_import = currency_sub.add_parser("import-csv", help="导入汇率 CSV")
@@ -378,6 +382,22 @@ def run() -> int:
                     )
                 result = BreakdownService(sess).compute(group_by=args.group_by, date_range=date_range)
             print(format_breakdown(result))
+            return 0
+
+        if args.cmd == "import-shipping":
+            from modules.finance.cpass_importer import import_cpass_shipping
+
+            r = import_cpass_shipping(args.file, dry_run=args.dry_run)
+            print(f"total: {r.total_rows}")
+            print(f"matched: {r.matched}")
+            print(f"unmatched (no tracking): {r.unmatched_no_tracking}")
+            print(f"unmatched (cancelled): {r.unmatched_cancelled}")
+            print(f"written: {r.written}{'(dry_run)' if args.dry_run else ''}")
+            print(f"skipped (Payable=0): {r.skipped_zero}")
+            if r.errors:
+                print(f"errors ({len(r.errors)}):")
+                for e in r.errors:
+                    print(f"  - {e}")
             return 0
 
     parser.print_help()

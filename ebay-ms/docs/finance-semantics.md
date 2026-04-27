@@ -1,7 +1,7 @@
 # 财务语义文档(eBay-MS Finance Semantics)
 
-**版本**:v1.1,2026-04-26
-**对应代码基线**:Day 31-C(在 5eab8c9 之上)
+**版本**:v1.2,2026-04-27
+**对应代码基线**:Day 31.5-B(在 4f436a2 之上)
 
 本文档固化 eBay-MS 项目的财务核算语义。任何涉及金额/利润计算的代码和测试,必须以本文档为准。
 
@@ -41,7 +41,7 @@
 ### 关键业务事实
 
 1. **买家付的运费 = 我们的收入**。买家支付的运费会进入我们的账户。
-2. **我们付给物流商的实际运费** = 我们的成本。**但这部分数据不在 eBay API 里,由另一个物流平台(Orange Connex)记录**。本系统目前不采集这个字段 —— `shipping_actual` 字段和 Transaction 类型暂缺,规划 Day 31 单笔盈亏分析时引入。
+2. **我们付给物流商的实际运费** = 我们的成本。**这部分数据不在 eBay API 里,由 cpass/Orange Connex xlsx 导入**。Day 31.5-B 起已采集为 `SHIPPING_ACTUAL`。
 3. **平台费、广告费、税费 — 三者都是从订单销售金额中扣除**。它们不会到卖家账户,但都是订单的资金出向。从卖家利润表看,它们都是"收入侧的减项"。
 
 ---
@@ -57,6 +57,7 @@
 | **SHIPPING** | NULL | **+** | 买家支付的运费(卖家收入) | `fulfillmentHrefs[0].shippingCost.value` | ✅ 已实装 |
 | **AD_FEE** | NULL | **−** | Promoted Listing 广告费 | `/sell/finances/v1/transaction` 中 `transactionType=NON_SALE_CHARGE` & `feeType=AD_FEE`,或 `itemTxSummaries[j]` 中 `feeType=AD_FEE` | ✅ 已实装(Day 31-B) |
 | **SALE_TAX** | NULL | **+** | 销售税(代收代付,转给税局,**不进任何聚合**) | 订单级 `ebayCollectAndRemitTaxes[]` | ✅ 已实装(Day 31-B) |
+| **SHIPPING_ACTUAL** | NULL | **+** | 实际运费成本(cpass 实付,含关税/清关费等4项fee之和) | 非 eBay API,来自 cpass `cpass运单费用明细.xlsx` | ✅ 已实装(Day 31.5-B) |
 | **REFUND** | 视情况 | **−** | 退款 | 手工或未来扩展 | ⚠️ 模型存在,`OrderSyncService` 未写入 |
 | **ADJUSTMENT** | 视情况 | 任意 | 人工调整 | 手工 | ⚠️ 模型存在,无自动采集 |
 
@@ -67,11 +68,7 @@
 | `Order.ad_fee_total` | Numeric, nullable | 订单级广告费合计(冗余存,用于守恒校验) |
 | `Order.buyer_paid_total` | Numeric, nullable | 买家实际支付总额(`pricingSummary.total + ebayCollectAndRemitTaxes`,**含税**) |
 
-**当前完全未采集的项**(Day 31.5+):
-
-| 项目 | 来源 | 现实状态 | 对毛利的影响 |
-|------|------|---------|-------------|
-| **物流实际运费 (shipping_actual)** | 非 eBay API,来自 Orange Connex CSV | ❌ 未采集(Day 31.5 引入多源 CSV 导入) | **高估毛利**(运费是实打实的出向) |
+🎉 当前主要费用项已采集。
 
 **符号规则**(`OrderSyncService` / `TransactionService` 写入时强制):
 
@@ -96,12 +93,10 @@
        + Σ AD_FEE.amount_jpy                  ← Promoted Listing 广告费(−,已符号化,Day 31-B 起采集)
        + Σ REFUND.amount_jpy                  ← 退款(−,冲销收入)
        − Σ SALE.total_cost                    ← 进货成本 COGS(+)
-       − Σ SHIPPING_ACTUAL.amount_jpy         ← ❌ 待采集(物流实际运费,Orange Connex 侧,Day 31.5)
+       − Σ SHIPPING_ACTUAL.amount_jpy         ← 物流实际运费(cpass 导入)
 ```
 
 注:SALE_TAX **不在公式中**——本质是代收代付,且 `total_revenue` 基于 lineItemCost(不含税),详见 §4c。
-
-标注 ❌ 的一项在当前系统里**值恒为 0**(因为没有对应 Transaction 记录)。当前毛利仍**系统性高估**实际利润,但偏差幅度比 Day 28 时小很多(广告费已扣)。
 
 ### 4b. 现阶段可用公式(Day 29 → Day 31-C Dashboard 实际使用)
 
@@ -117,16 +112,18 @@ total_fee       = Σ |amount_jpy| where type = FEE AND amount_jpy IS NOT NULL
 total_ad_fee    = Σ |amount_jpy| where type = AD_FEE AND amount_jpy IS NOT NULL
                   (取绝对值;Day 31-C 起独立展示为 "Promoted Listing 费用")
 
-gross_profit    = total_revenue − total_cost − total_fee − total_ad_fee
+total_shipping_actual = Σ |amount_jpy| where type = SHIPPING_ACTUAL AND amount_jpy IS NOT NULL
+                        (取绝对值;Day 31.5-B 起独立展示为 "实际运费成本")
+
+gross_profit    = total_revenue − total_cost − total_fee − total_ad_fee − total_shipping_actual
 
 gross_margin    = gross_profit / total_revenue   (total_revenue > 0 时)
 ```
 
-**Dashboard 必须显式声明**(在 CLI 输出和任何报表里):
+**Dashboard 当前口径**(在 CLI 输出和任何报表里):
 
-> ⚠️ 当前成本只含 COGS、平台费、广告费,未含:物流实际运费。
-> 毛利润数值仍然偏高(但比 Day 28 时小很多,已扣广告费)。
-> 待 Day 31.5 多源 CSV 导入采集 shipping_actual 后,数值会进一步趋真实。
+> ✅ Day 31.5-B 起,主要费用项均已采集。
+> 剩余精度问题: FEE 尚未细分子类、REFUND 仍未自动采集。
 
 ### 4c. 税费是否算"利润减项"?
 
@@ -181,6 +178,8 @@ margin = profit_jpy / amount_jpy
 7. `Σ Transaction.AD_FEE.amount == -Order.ad_fee_total`(对 `ad_fee_total` 非 NULL 的订单,Day 31-B 起)
 8. `Σ Transaction.SALE_TAX.amount >= 0`(销售税总和应非负,Day 31-B 起)
 9. `Order.buyer_paid_total ≈ Σ SALE.amount + Σ SHIPPING.amount + Σ SALE_TAX.amount`(原币 USD,容差 1e-2,Day 31-B 起)
+10. 对每个 cpass tracking_no 在 Fee Details 中出现的所有 fee 之和,应等于该 tracking 对应 ebay_order 的 SHIPPING_ACTUAL.amount_jpy
+11. 同一 ebay_order_id 的 SHIPPING_ACTUAL Transaction 数量 ≤ 1(cpass_importer 通过先 DELETE 后 INSERT 保证幂等)
 
 ---
 
@@ -193,9 +192,9 @@ margin = profit_jpy / amount_jpy
 | 采集销售税 SALE_TAX | Day 31-B | ✅ **已完成**(commit `1b51b86`) |
 | 采集 `pricingSummary.total` → `Order.buyer_paid_total` | Day 31-B | ✅ **已完成**(commit `1b51b86`) |
 | Dashboard / Breakdown 公式纳入 AD_FEE | Day 31-C | ✅ **已完成**(本次) |
-| 引入 `shipping_actual` 字段和 Transaction 类型 | Day 31.5 | 来源 Orange Connex CSV,非 eBay API,多源导入 |
-| Dashboard 显示精确毛利(含所有费用) | Day 31.5 后 | 当前公式无需再改,只要数据进 Transaction 表,聚合自动正确 |
-| `order_analyzer.py`(单笔订单盈亏分析) | Day 31.5+ | 待 shipping_actual 采集就位后再做 |
+| 引入 `shipping_actual` 字段和 Transaction 类型 | Day 31.5-B | ✅ 已完成(cpass xlsx 导入) |
+| Dashboard 显示精确毛利(含所有费用) | Day 31.5-B | ✅ 已完成(公式已纳入 SHIPPING_ACTUAL) |
+| `order_analyzer.py`(单笔订单盈亏分析) | Day 31.5+ | shipping_actual 已就位,可实施 |
 | REFUND 自动采集 | 未排期 | 需要在 order status 变化时或通过 Finances API 触发 |
 
 ---

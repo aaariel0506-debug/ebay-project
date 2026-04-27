@@ -25,6 +25,7 @@ class BreakdownRow:
     cost_jpy: Decimal
     fee_jpy: Decimal
     ad_fee_jpy: Decimal
+    shipping_actual_jpy: Decimal
     gross_profit_jpy: Decimal
     gross_margin: float | None
     total_orders: int
@@ -70,6 +71,7 @@ class BreakdownService:
                     cost_jpy=dash.total_cost_jpy,
                     fee_jpy=dash.total_fee_jpy,
                     ad_fee_jpy=dash.total_ad_fee_jpy,
+                    shipping_actual_jpy=dash.total_shipping_actual_jpy,
                     gross_profit_jpy=dash.gross_profit_jpy,
                     gross_margin=dash.gross_margin,
                     total_orders=dash.total_orders,
@@ -120,7 +122,7 @@ def format_breakdown(result: BreakdownResult) -> str:
     if not result.rows:
         lines.append("║ (无数据)")
     else:
-        headers = ["Period", "Revenue", "Cost", "Fee", "AdFee", "Profit", "Margin", "Orders", "Cov"]
+        headers = ["Period", "Revenue", "Cost", "Fee", "AdFee", "Ship*", "Profit", "Margin", "Orders", "Cov"]
         rendered = [
             [
                 row.period,
@@ -128,6 +130,7 @@ def format_breakdown(result: BreakdownResult) -> str:
                 _fmt_yen(row.cost_jpy),
                 _fmt_yen(row.fee_jpy),
                 _fmt_yen(row.ad_fee_jpy),
+                _fmt_yen(row.shipping_actual_jpy),
                 _fmt_yen(row.gross_profit_jpy),
                 _fmt_pct(row.gross_margin),
                 str(row.total_orders),
@@ -145,13 +148,13 @@ def format_breakdown(result: BreakdownResult) -> str:
             lines.append(f"║ {' '.join(value.ljust(widths[i]) for i, value in enumerate(render_row))}")
     lines.extend([
         "║",
-        "║ ⚠️ 未采集项(当前毛利润仍偏高):",
     ])
-    for item in result.uncaptured_items:
-        if item == "shipping_actual":
-            lines.append(f"║ - {item} (实际运费成本,Day 31.5 多源 CSV 导入后采集)")
-        else:
+    if result.uncaptured_items:
+        lines.append("║ ⚠️ 未采集项(当前毛利润仍偏高):")
+        for item in result.uncaptured_items:
             lines.append(f"║ - {item}")
+    else:
+        lines.append("║ ✅ 所有费用项已采集")
     lines.append("║ 详见 docs/finance-semantics.md")
     lines.append("╚════════════════════════════════════════════════════════════════════╝")
     return "\n".join(lines)

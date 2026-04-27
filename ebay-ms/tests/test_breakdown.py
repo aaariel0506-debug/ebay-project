@@ -184,7 +184,7 @@ class TestOutput:
     def test_format_breakdown_contains_uncaptured_warning(self, db_session):
         r = BreakdownService(db_session).compute(group_by="month", date_range=DateRange(datetime(2026, 4, 1), datetime(2026, 5, 1)))
         text = format_breakdown(r)
-        assert "未采集" in text
+        assert "已采集" in text
 
     def test_format_breakdown_empty_shows_no_data_line(self, db_session):
         r = BreakdownService(db_session).compute(group_by="month", date_range=DateRange(datetime(2026, 4, 1), datetime(2026, 5, 1)))
@@ -231,3 +231,21 @@ class TestAdFee:
         adfee_pos = text.find("AdFee")
         profit_pos = text.find("Profit")
         assert 0 < fee_pos < adfee_pos < profit_pos
+
+
+class TestShippingActual:
+    def test_breakdown_row_has_shipping_actual_field(self, db_session):
+        _tx(db_session, "O1", TransactionType.SHIPPING_ACTUAL, amount_jpy=1200, when=datetime(2026, 4, 15, 10))
+        row = BreakdownService(db_session).compute(group_by="month", date_range=DateRange(datetime(2026, 4, 1), datetime(2026, 5, 1))).rows[0]
+        assert row.shipping_actual_jpy == Decimal("1200")
+
+    def test_breakdown_per_period_gross_profit_subtracts_shipping_actual(self, db_session):
+        _tx(db_session, "O1", TransactionType.SALE, amount_jpy=10000, total_cost=3000, when=datetime(2026, 4, 15, 10))
+        _tx(db_session, "O1", TransactionType.SHIPPING_ACTUAL, amount_jpy=1200, when=datetime(2026, 4, 15, 10))
+        row = BreakdownService(db_session).compute(group_by="month", date_range=DateRange(datetime(2026, 4, 1), datetime(2026, 5, 1))).rows[0]
+        assert row.gross_profit_jpy == Decimal("5800")
+
+    def test_format_breakdown_contains_ship_column(self, db_session):
+        _tx(db_session, "O1", TransactionType.SHIPPING_ACTUAL, amount_jpy=1200, when=datetime(2026, 4, 15, 10))
+        text = format_breakdown(BreakdownService(db_session).compute(group_by="month", date_range=DateRange(datetime(2026, 4, 1), datetime(2026, 5, 1))))
+        assert "Ship*" in text

@@ -156,11 +156,13 @@ class TestOrderCrud:
     """Order CRUD 测试"""
 
     def setup_method(self):
+        self._clear(OrderItem)
         self._clear(Order)
         self._clear(Product)
 
     def teardown_method(self):
         # 清理本 class 往生产 DB commit 的数据,避免污染后续测试
+        self._clear(OrderItem)
         self._clear(Order)
         self._clear(Product)
 
@@ -376,7 +378,7 @@ class TestDay28_5:
         assert has_column("sold_via_ad_campaign"), "upgrade 后应该有 sold_via_ad_campaign 列"
 
         # 2. downgrade -1(回到 Day 31-A 的 migration)
-        r = run_alembic("downgrade", "-1")
+        r = run_alembic("downgrade", "1f2e3d4c5b6a")
         assert r.returncode == 0, f"downgrade failed: {r.stderr}"
         assert not has_column("total_due_seller_raw"), "downgrade 后 total_due_seller_raw 列应消失"
         assert not has_column("sold_via_ad_campaign"), "downgrade 后 sold_via_ad_campaign 列应消失"
