@@ -212,7 +212,13 @@ class OrderSyncService:
         # （此处不单独读取 pricingSummary.total）
 
         # order status
-        api_status = data.get("orderFulfillmentStatus", {}).get("status")
+        # eBay API 返回 orderFulfillmentStatus 是字符串(如 "NOT_STARTED"),
+        # 不是嵌套 dict {"status": "..."}。容错两种格式以防上游变化。
+        raw_status = data.get("orderFulfillmentStatus")
+        if isinstance(raw_status, dict):
+            api_status = raw_status.get("status")
+        else:
+            api_status = raw_status  # str 或 None
         status = _parse_order_status(api_status)
 
         # shipping cost（订单级，从 pricingSummary.deliveryCost 读）
