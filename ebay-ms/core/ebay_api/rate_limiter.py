@@ -32,7 +32,10 @@ class RateLimitStore:
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self._lock = threading.Lock()
+        # RLock(可重入锁):必须用,因为 increment() 在持有锁时还会调 get_count()
+        # 自身,二者用同一把锁。普通 Lock 会自我死锁(EbayClient.get → _request →
+        # rate_limiter.record → check + increment → 持锁中调 get_count → 死)。
+        self._lock = threading.RLock()
         self._ensure_table()
 
     def _ensure_table(self):
