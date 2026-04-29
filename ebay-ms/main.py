@@ -171,6 +171,15 @@ def run() -> int:
     p_stk_list.add_argument("--limit", type=int, default=50)
     inv_offline_sub.add_parser("report", help="导出库存报表（快照 / 出入库明细）")
 
+    # ── product 模块 ──────────────────────────────────────────────────────
+    product_p = sub.add_parser("product", help="商品主数据模块")
+    product_sub = product_p.add_subparsers(dest="cmd", help="子命令")
+
+    p_imp_listings = product_sub.add_parser("import-listings", help="从 Excel listing 表预建 SKU 主数据")
+    p_imp_listings.add_argument("--file", action="append", required=True, help="Excel 文件路径（可多次指定）")
+    p_imp_listings.add_argument("--no-expand-short-links", dest="no_expand_short_links",
+                               action="store_true", help="禁用 amzn.asia 短链展开")
+
     # ── finance 模块 ────────────────────────────────────────────────────────
     finance_p = sub.add_parser("finance", help="财务模块")
     finance_sub = finance_p.add_subparsers(dest="cmd", help="子命令")
@@ -400,8 +409,17 @@ def run() -> int:
                     print(f"  - {e}")
             return 0
 
+    if args.module == "product":
+        from pathlib import Path
+
+        from modules.listing.listing_importer import ListingImporter
+        importer = ListingImporter(expand_short_links=not args.no_expand_short_links)
+        paths = [Path(p) for p in args.file]
+        result = importer.import_files(paths)
+        print(result.summary())
+        return 0
+
     parser.print_help()
-    return 0
 
 
 if __name__ == "__main__":
