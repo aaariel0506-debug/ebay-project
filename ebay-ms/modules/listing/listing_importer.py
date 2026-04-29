@@ -59,15 +59,16 @@ class ListingImporter:
     """读取 v2/v3 Excel 表 → upsert 到 products。
 
     核心规则：
-    1. 命令行顺序合并，v3 优先（后遇到已存在 SKU 跳过）
-    2. amzn.asia 短链自动展开拿 ASIN，展开失败 asin=NULL 但 SKU 仍预建
-    3. SKU 已存在但 asin/source_url 有变化 → UPDATE（不动 status/cost_price/title/variant_note）
-    4. SKU 已存在且无变化 → 跳过（写入 sku_unchanged）
+    1. 逆序处理命令行文件，后文件优先（v3 优先）——v3 放命令行最后，其数据覆盖 v2
+    2. 同文件内重复：第一个生效，计入 rows_dup_in_source
+    3. amzn.asia 短链自动展开拿 ASIN，展开失败 asin=NULL 但 SKU 仍预建
+    4. SKU 已存在但 asin/source_url 有变化 → UPDATE（不动 status/cost_price/title/variant_note）
+    5. SKU 已存在且无变化 → 跳过（写入 sku_unchanged）
     """
 
     SHEET_NAME = "利润试算表"
-    HEADER_ROW = 2   # 0-indexed; pandas header=2 → 第 3 行
-    DROP_FIRST_DATA_ROW = True   # 第 4 行是"例子"，剔除
+    HEADER_ROW = 1   # 0-indexed; pandas header=1 → 第 2 行（1-indexed=row 2）为表头
+    DROP_FIRST_DATA_ROW = True   # 第 3 行（1-indexed=row 3）是"例子"，剔除
     EXPAND_SHORT_LINK_DELAY = 0.5   # 礼貌间隔，避免 amzn 限流
 
     def __init__(self, *, expand_short_links: bool = True):
@@ -75,10 +76,11 @@ class ListingImporter:
 
     def import_files(self, paths: list[Path]) -> ImportListingsResult:
         result = ImportListingsResult()
-        # sku → row_dict; 先到先得（v3 优先 → 命令行最后文件优先）
+        # sku → row_dict
+        # 逆序收集：后文件覆盖先文件（v3 优先 → v3 放命令行最后）
         all_rows: dict[str, dict] = {}
 
-        for path in paths:
+        for path in reversed(paths):
             log.info("读取 listing 表: {}", path)
             result.sources_read.append(str(path))
             df = self._read_excel(path)
@@ -94,20 +96,21 @@ class ListingImporter:
                     result.rows_no_sku += 1
                     continue
 
-                # 同一文件内重复
+                # 同一文件内重复：第一个生效
                 if sku in seen_in_this_file:
                     result.rows_dup_in_source += 1
                     result.duplicate_skus.append(sku)
                     continue
                 seen_in_this_file.add(sku)
 
-                # v3 优先 → 后续文件的同名 SKU 跳过
+                # 跨文件重复：后文件优先（先文件的同名 SKU 跳过）
                 if sku in all_rows:
-                    continue
+                    continue  # 已有数据，跳过
 
-                if not ec_url:
+                # 空 URL（含 pandas 的 nan）也预建 SKU，只记 rows_no_url
+                url_str = str(ec_url) if ec_url is not None else ""
+                if not ec_url or url_str.lower() == "nan":
                     result.rows_no_url += 1
-                    # 仍预建 SKU（asin=NULL, source_url=NULL）
                     all_rows[sku] = {"sku": sku, "asin": None, "source_url": None}
                     continue
 
@@ -174,4 +177,6 @@ class ListingImporter:
         if v is None:
             return None
         s = str(v).strip()
-        return s if s else None
+        if s in ("", "nan", "None"):
+            return None
+        return s

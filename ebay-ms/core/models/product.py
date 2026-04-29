@@ -36,7 +36,7 @@ class Product(Base, TimestampMixin):
 
     sku: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    asin: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, index=True)
+    asin: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     source_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     variant_note: Mapped[Optional[str]] = mapped_column(Text(), nullable=True)
     cost_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
@@ -52,7 +52,6 @@ class Product(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_products_status", "status"),
         Index("ix_products_category", "category"),
-        Index("ix_products_asin", "asin"),
     )
 
     def __repr__(self) -> str:

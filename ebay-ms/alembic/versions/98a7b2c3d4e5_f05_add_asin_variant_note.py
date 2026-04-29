@@ -1,6 +1,6 @@
 """extend products for import-listings: title/cost nullable + asin + variant_note
 
-Revision ID: 98a7b2c3d4e5_f05_add_asin_variant_note.py
+Revision ID: 98a7b2c3d4e5_f05
 Revises: c1d2e3f4a5b6
 Create Date: 2026-04-29 12:30:00
 
@@ -31,7 +31,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Revert: drop new columns + restore NOT NULL."""
+    """Revert: drop new columns + restore NOT NULL.
+    Note: ix_products_asin is also dropped since it was created by this migration."""
     op.drop_index("ix_products_asin", table_name="products")
     with op.batch_alter_table("products") as batch_op:
         batch_op.drop_column("variant_note")
