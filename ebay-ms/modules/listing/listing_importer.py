@@ -59,7 +59,7 @@ class ListingImporter:
     """读取 v2/v3 Excel 表 → upsert 到 products。
 
     核心规则：
-    1. 逆序处理命令行文件，后文件优先（v3 优先）——v3 放命令行最后，其数据覆盖 v2
+    1. 命令行顺序处理，先遇到已存在 SKU 则跳过（v3 优先 → v3 放命令行最前面）
     2. 同文件内重复：第一个生效，计入 rows_dup_in_source
     3. amzn.asia 短链自动展开拿 ASIN，展开失败 asin=NULL 但 SKU 仍预建
     4. SKU 已存在但 asin/source_url 有变化 → UPDATE（不动 status/cost_price/title/variant_note）
@@ -67,8 +67,8 @@ class ListingImporter:
     """
 
     SHEET_NAME = "利润试算表"
-    HEADER_ROW = 1   # 0-indexed; pandas header=1 → 第 2 行（1-indexed=row 2）为表头
-    DROP_FIRST_DATA_ROW = True   # 第 3 行（1-indexed=row 3）是"例子"，剔除
+    HEADER_ROW = 1   # 0-indexed; pandas header=1 → row 2（1-indexed=row 2）为表头
+    DROP_FIRST_DATA_ROW = True   # row 3（1-indexed=row 3）是"例子"，剔除
     EXPAND_SHORT_LINK_DELAY = 0.5   # 礼貌间隔，避免 amzn 限流
 
     def __init__(self, *, expand_short_links: bool = True):
@@ -76,11 +76,10 @@ class ListingImporter:
 
     def import_files(self, paths: list[Path]) -> ImportListingsResult:
         result = ImportListingsResult()
-        # sku → row_dict
-        # 逆序收集：后文件覆盖先文件（v3 优先 → v3 放命令行最后）
+        # sku → row_dict; 先到先得（v3 优先 → 命令行先传 v3 则先遇到，先写入）
         all_rows: dict[str, dict] = {}
 
-        for path in reversed(paths):
+        for path in paths:
             log.info("读取 listing 表: {}", path)
             result.sources_read.append(str(path))
             df = self._read_excel(path)
@@ -103,9 +102,9 @@ class ListingImporter:
                     continue
                 seen_in_this_file.add(sku)
 
-                # 跨文件重复：后文件优先（先文件的同名 SKU 跳过）
+                # v3 优先：先遇到已存在 SKU 则跳过（后文件的同名 SKU 不覆盖）
                 if sku in all_rows:
-                    continue  # 已有数据，跳过
+                    continue
 
                 # 空 URL（含 pandas 的 nan）也预建 SKU，只记 rows_no_url
                 url_str = str(ec_url) if ec_url is not None else ""
