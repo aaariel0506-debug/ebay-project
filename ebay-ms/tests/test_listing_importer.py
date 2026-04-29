@@ -27,19 +27,26 @@ def in_memory_db(tmp_path: Path) -> Session:
 
 
 def make_minimal_excel(path: Path, rows: list[dict]) -> Path:
-    """生成最简 Excel（利润试算表）。
+    """生成最简 Excel，匹配 Ariel 真实 v2/v3 Excel 的 row 结构。
 
-    真实 Excel 结构：row1=标题分组 / row2=字段名 / row3=例子(DROP) / row4+=数据
-    ListingImporter 使用 header=1 (0-indexed=row2), DROP_FIRST_DATA_ROW=True。
+    真实结构:
+      row 1: 汇率参考行（混合内容，pandas 当数据忽略）
+      row 2: 空行
+      row 3: 字段名（表头）
+      row 4: 例子（被 DROP_FIRST_DATA_ROW 剔除）
+      row 5+: 真实数据
+
+    ListingImporter 用 header=2（0-indexed=row 3 的 0-indexed=2）。
     """
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "利润试算表"
-    ws.append(["商品管理", None])   # row 1: 标题分组（pandas 忽略）
-    ws.append(["ItemID（SKU)", "EC site URL"])   # row 2: 字段名（表头）
-    ws.append(["例子", None])   # row 3: 例子（被 DROP）
+    ws.append(["汇率", 142.0])                   # row 1: 杂项行
+    ws.append([None, None])                       # row 2: 空行
+    ws.append(["EC site URL", "ItemID（SKU)"])    # row 3: 字段名（表头）
+    ws.append(["例子", "示例"])                  # row 4: 例子（DROP）
     for r in rows:
-        ws.append([r.get("sku", ""), r.get("url", "")])
+        ws.append([r.get("url", ""), r.get("sku", "")])
     wb.save(str(path))
     return path
 

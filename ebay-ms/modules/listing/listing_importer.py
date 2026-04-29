@@ -67,7 +67,7 @@ class ListingImporter:
     """
 
     SHEET_NAME = "利润试算表"
-    HEADER_ROW = 1   # 0-indexed; pandas header=1 → row 2（1-indexed=row 2）为表头
+    HEADER_ROW = 2   # 0-indexed; pandas header=2 → row 3（1-indexed=row 3）为表头
     DROP_FIRST_DATA_ROW = True   # row 3（1-indexed=row 3）是"例子"，剔除
     EXPAND_SHORT_LINK_DELAY = 0.5   # 礼貌间隔，避免 amzn 限流
 
