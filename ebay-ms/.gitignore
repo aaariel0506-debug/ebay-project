@@ -64,3 +64,8 @@ htmlcov/
 # GPG keys
 *.gpg
 *.asc
+
+# Amazon import 输出目录（含个人进货数据）
+.ebay-project/
+imports/
+data/
