@@ -84,7 +84,12 @@ def run() -> int:
 
     _ = inv_online_sub.add_parser("status", help="库存概览")
     _ = inv_online_sub.add_parser("alert", help="缺货/低库存预警")
-    _ = inv_online_sub.add_parser("sync", help="从 eBay 同步 listing")
+    p_sync_inv = inv_online_sub.add_parser("sync", help="从 eBay 同步 listing")
+    p_sync_inv.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="仅打印预览，不写库",
+    )
     p_price_check = inv_online_sub.add_parser("price-check", help="检查进货价变化")
     p_price_check.add_argument("--sku", help="单个 SKU")
     p_price_check.add_argument("--file", type=str, help="CSV 文件路径（批量）")
