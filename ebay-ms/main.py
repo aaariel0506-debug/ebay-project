@@ -180,6 +180,16 @@ def run() -> int:
     p_imp_listings.add_argument("--no-expand-short-links", dest="no_expand_short_links",
                                action="store_true", help="禁用 amzn.asia 短链展开")
 
+    p_imp_amz = product_sub.add_parser(
+        "import-amazon-costs",
+        help="从 Amazon 注文履歴 CSV 导入进货成本",
+    )
+    p_imp_amz.add_argument("--file", required=True, help="Amazon 注文履歴 CSV 路径")
+    p_imp_amz.add_argument(
+        "--output-dir",
+        help="报告输出目录（默认 ~/.ebay-project/imports/）",
+    )
+
     # ── finance 模块 ────────────────────────────────────────────────────────
     finance_p = sub.add_parser("finance", help="财务模块")
     finance_sub = finance_p.add_subparsers(dest="cmd", help="子命令")
@@ -412,12 +422,30 @@ def run() -> int:
     if args.module == "product":
         from pathlib import Path
 
-        from modules.listing.listing_importer import ListingImporter
-        importer = ListingImporter(expand_short_links=not args.no_expand_short_links)
-        paths = [Path(p) for p in args.file]
-        result = importer.import_files(paths)
-        print(result.summary())
-        return 0
+        if args.cmd == "import-listings":
+            from modules.listing.listing_importer import ListingImporter
+            importer = ListingImporter(expand_short_links=not args.no_expand_short_links)
+            paths = [Path(p) for p in args.file]
+            result = importer.import_files(paths)
+            print(result.summary())
+            return 0
+
+        if args.cmd == "import-amazon-costs":
+            from modules.finance.amazon_cost_importer import AmazonCostImporter
+            importer = AmazonCostImporter(
+                output_dir=Path(args.output_dir) if args.output_dir else None,
+            )
+            result = importer.import_csv(Path(args.file))
+            print(result.summary())
+            print("\n报告输出:")
+            print(f"  {result.summary_txt}")
+            print(f"  {result.ambiguous_csv}")
+            print(f"  {result.unmapped_csv}")
+            print(f"  {result.non_amazon_csv}")
+            return 0
+
+        parser.print_help()
+        return 1
 
     parser.print_help()
 
