@@ -46,7 +46,7 @@ class SyncService:
 
         self.client = client or EbayClient()
 
-    def full_sync(self, incremental: bool = False) -> SyncResult:
+    def full_sync(self, incremental: bool = False, dry_run: bool = False) -> SyncResult:
         """全量同步所有活跃 listing 到本地 EbayListing 表。
 
         Args:
@@ -73,8 +73,24 @@ class SyncService:
         current_skus = {item["sku"] for item in all_items if item.get("sku")}
 
         # Upsert 每条记录
+        listings_with_variants = 0
+        variant_samples = []
         for item in all_items:
             try:
+                # 检查 variants 是否非空（用于 dry-run 统计）
+                raw_variants = item.get("variants") or item.get("variantSummaries")
+                has_variants = raw_variants not in (None, {}, "null", "[]")
+                if has_variants:
+                    listings_with_variants += 1
+                    if len(variant_samples) < 3:
+                        variant_samples.append({
+                            "sku": item.get("sku", "?"),
+                            "variants": raw_variants,
+                        })
+
+                if dry_run:
+                    continue
+
                 is_new = self._upsert_listing(item)
                 if is_new:
                     result.new_count += 1
@@ -84,6 +100,18 @@ class SyncService:
                 result.error_count += 1
                 result.errors.append(f"[{item.get('sku','?')}] {exc}")
                 log.error(f"Upsert listing 失败 sku={item.get('sku')}: {exc}")
+
+        # dry-run: 打印预览
+        if dry_run:
+            print("=== inventory online sync --dry-run ===")
+            print(f"EbayListing 总数: {result.total_on_ebay}")
+            print(f"带 variants: {listings_with_variants} 条")
+            if variant_samples:
+                print(f"\n样本（前 {len(variant_samples)} 条）:")
+                import json
+                for s in variant_samples:
+                    print(f"  SKU={s['sku']}: {json.dumps(s['variants'])[:200]}")
+            return result
 
         # 标记已下架的记录（本地有但 eBay 不再有）
         ended_skus = self._mark_ended_listings(current_skus)
@@ -118,8 +146,12 @@ class SyncService:
 
         return items
 
-    def _upsert_listing(self, item: dict) -> bool:
+    def _upsert_listing(self, item: dict, dry_run: bool = False) -> bool:
         """将一条 eBay inventory item upsert 到 EbayListing 表。
+
+        Args:
+            item: eBay inventory item dict.
+            dry_run: 如果 True，不写库，只返回结果。
 
         Returns:
             True if new record created, False if updated.
@@ -146,6 +178,9 @@ class SyncService:
 
         now = datetime.now(timezone.utc)
 
+        # 提取 variants（多属性变体信息）
+        raw_variants = item.get("variants") or item.get("variantSummaries")
+
         with get_session() as sess:
             existing = sess.query(EbayListing).filter(
                 EbayListing.sku == sku
@@ -159,6 +194,8 @@ class SyncService:
                     existing.listing_price = price
                 existing.status = ListingStatus.ACTIVE
                 existing.last_synced = now
+                if raw_variants:
+                    existing.variants = raw_variants
                 sess.commit()
                 return False
             else:
@@ -170,6 +207,7 @@ class SyncService:
                     quantity_available=quantity or 0,
                     status=ListingStatus.ACTIVE,
                     last_synced=now,
+                    variants=raw_variants,
                 )
                 sess.add(listing)
                 sess.commit()

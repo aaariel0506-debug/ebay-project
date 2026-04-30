@@ -94,6 +94,14 @@ def run_inventory_online_cmd(argv: list[str]) -> int:
     )
     p_consistency.add_argument("--sku", help="可选：只检查指定 SKU")
 
+    # sync：从 eBay 同步 listing（含 variants）
+    p_sync = sub.add_parser("sync", help="从 eBay Inventory API 全量同步 listing")
+    p_sync.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="仅打印将同步的 listing 数量和 variants JSON 样本，不写库",
+    )
+
     args = parser.parse_args(argv)
 
     if args.cmd == "price-check":
@@ -108,6 +116,8 @@ def run_inventory_online_cmd(argv: list[str]) -> int:
         return _cmd_adjust(args)
     elif args.cmd == "check-consistency":
         return _cmd_check_consistency(args)
+    elif args.cmd == "sync":
+        return _cmd_sync(args)
     else:
         parser.print_help()
         return 0
@@ -295,4 +305,19 @@ def _cmd_check_consistency(args) -> int:
     if not report.all_consistent:
         print("\n提示：线上线下不一致时请人工确认，避免重复扣减库存。")
         return 1
+    return 0
+
+
+def _cmd_sync(args) -> int:
+    from modules.inventory_online.sync_service import SyncService
+
+    svc = SyncService()
+    result = svc.full_sync(dry_run=bool(args.dry_run))
+
+    if not args.dry_run:
+        print(result.summary())
+        if result.errors:
+            print(f"\n错误 ({len(result.errors)}):")
+            for e in result.errors[:5]:
+                print(f"  - {e}")
     return 0
