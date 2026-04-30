@@ -190,6 +190,16 @@ def run() -> int:
         help="报告输出目录（默认 ~/.ebay-project/imports/）",
     )
 
+    p_sync_vars = product_sub.add_parser(
+        "sync-variants-from-ebay",
+        help="从 eBay Inventory API 拉 active listing 变体，反向写入 products 子 SKU",
+    )
+    p_sync_vars.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="打印预览，不写库",
+    )
+
     # ── finance 模块 ────────────────────────────────────────────────────────
     finance_p = sub.add_parser("finance", help="财务模块")
     finance_sub = finance_p.add_subparsers(dest="cmd", help="子命令")
@@ -442,6 +452,17 @@ def run() -> int:
             print(f"  {result.ambiguous_csv}")
             print(f"  {result.unmapped_csv}")
             print(f"  {result.non_amazon_csv}")
+            return 0
+
+        if args.cmd == "sync-variants-from-ebay":
+            from modules.listing.variant_sku_syncer import VariantSkuSyncer
+            syncer = VariantSkuSyncer()
+            result = syncer.sync_from_ebay_listings(dry_run=bool(args.dry_run))
+            print(result.summary())
+            if result.skipped:
+                print("\n跳过详情（写入 variant_sync_skipped.csv）:")
+                for s in result.skipped[:10]:
+                    print(f"  {s['sku']}  原因={s['reason']}")
             return 0
 
         parser.print_help()
