@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Optional
 
 from core.models.base import Base, TimestampMixin
-from sqlalchemy import Enum, Index, Numeric, String, Text
+from sqlalchemy import Enum, ForeignKey, Index, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 
@@ -39,6 +39,11 @@ class Product(Base, TimestampMixin):
     asin: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     source_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     variant_note: Mapped[Optional[str]] = mapped_column(Text(), nullable=True)
+    parent_sku: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("products.sku", ondelete="SET NULL"),
+        nullable=True,
+    )
     cost_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     cost_currency: Mapped[str] = mapped_column(String(3), default="JPY", nullable=False)
     supplier: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
@@ -52,6 +57,7 @@ class Product(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_products_status", "status"),
         Index("ix_products_category", "category"),
+        Index("ix_products_parent_sku", "parent_sku"),
     )
 
     def __repr__(self) -> str:

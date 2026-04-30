@@ -84,7 +84,12 @@ def run() -> int:
 
     _ = inv_online_sub.add_parser("status", help="库存概览")
     _ = inv_online_sub.add_parser("alert", help="缺货/低库存预警")
-    _ = inv_online_sub.add_parser("sync", help="从 eBay 同步 listing")
+    p_sync_inv = inv_online_sub.add_parser("sync", help="从 eBay 同步 listing")
+    p_sync_inv.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="仅打印预览，不写库",
+    )
     p_price_check = inv_online_sub.add_parser("price-check", help="检查进货价变化")
     p_price_check.add_argument("--sku", help="单个 SKU")
     p_price_check.add_argument("--file", type=str, help="CSV 文件路径（批量）")
@@ -188,6 +193,16 @@ def run() -> int:
     p_imp_amz.add_argument(
         "--output-dir",
         help="报告输出目录（默认 ~/.ebay-project/imports/）",
+    )
+
+    p_sync_vars = product_sub.add_parser(
+        "sync-variants-from-ebay",
+        help="从 eBay Inventory API 拉 active listing 变体，反向写入 products 子 SKU",
+    )
+    p_sync_vars.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="打印预览，不写库",
     )
 
     # ── finance 模块 ────────────────────────────────────────────────────────
@@ -442,6 +457,17 @@ def run() -> int:
             print(f"  {result.ambiguous_csv}")
             print(f"  {result.unmapped_csv}")
             print(f"  {result.non_amazon_csv}")
+            return 0
+
+        if args.cmd == "sync-variants-from-ebay":
+            from modules.listing.variant_sku_syncer import VariantSkuSyncer
+            syncer = VariantSkuSyncer()
+            result = syncer.sync_from_ebay_listings(dry_run=bool(args.dry_run))
+            print(result.summary())
+            if result.skipped:
+                print("\n跳过详情（写入 variant_sync_skipped.csv）:")
+                for s in result.skipped[:10]:
+                    print(f"  {s['sku']}  原因={s['reason']}")
             return 0
 
         parser.print_help()
