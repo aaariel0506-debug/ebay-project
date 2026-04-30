@@ -1,29 +1,33 @@
 """
 modules/listing/variant_sku_syncer.py
 
-从 EbayListing 表反向解析 variants JSON，在 products 表 upsert 子 SKU 记录。
+从 order_items 订单数据反向推导变体父子关系，写入 products 表。
 
- Brief 3 §T3 实现
- 数据流：
-   EbayListing（有 variants JSON）
-     → 解析 variants
-       → 父 SKU 不在 products 表 → 跳过，写 variant_sync_skipped.csv
-       → 子 SKU 不存在 → 创建（parent_sku / variant_note 等）
-       → 子 SKU 已存在 → 更新 parent_sku + variant_note（幂等）
- 输出：
-   ~/.ebay-project/imports/variant_sync_summary.txt
-   ~/.ebay-project/imports/variant_sync_skipped.csv
+数据源：order_items.sku 含下划线的子 SKU（如 01-2509-0002_Da）
+数据源：order_items.sku 不含下划线 → 不是变体，跳过
+
+父子关系推导：
+  子 SKU 01-2509-0002_Da → 父 SKU = 01-2509-0002（下划线最后一段为颜色/尺寸后缀）
+  颜色示例：_Da(深色), _Wh(白), _Em(翡翠), _RED, _BLUE
+  尺寸示例：_S, _M, _L, _XL
+  variant_note = 后缀的人类可读翻译（如 "_Da" → "Color: Dark"）
+
+路由：
+  父 SKU 不在 products 表 → 跳过，写 variant_sync_skipped.csv
+  子 SKU 不存在 → 创建（parent_sku / variant_note 等）
+  子 SKU 已存在 → 更新 parent_sku + variant_note（幂等）
+
+Brief 3 §T3
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import pandas as pd
 from core.database.connection import get_session
-from core.models import EbayListing, Product, ProductStatus
+from core.models import OrderItem, Product, ProductStatus
 from loguru import logger as log
 from sqlalchemy import select
 
@@ -36,14 +40,12 @@ OUTPUT_DIR = Path.home() / ".ebay-project" / "imports"
 class SyncResult:
     """同步结果汇总。"""
     dry_run: bool = False
-    listings_with_variants: int = 0
+    child_skus_found: int = 0   # order_items 里找到的子 SKU 总数
     created: int = 0
     updated: int = 0
     skipped: int = 0
     errors: int = 0
-    # 每个跳过记录的详情 {sku, reason, parent_sku}
     skipped_detail: list[dict] = field(default_factory=list)
-    # 每个错误详情 {listing_sku, error}
     error_detail: list[dict] = field(default_factory=list)
     summary_path: Optional[Path] = None
     skipped_path: Optional[Path] = None
@@ -52,7 +54,7 @@ class SyncResult:
         tag = "(--dry-run)" if self.dry_run else ""
         lines = [
             f"=== sync-variants-from-ebay {tag} ===",
-            f"EbayListing 带 variants: {self.listings_with_variants} 条",
+            f"order_items 子 SKU（含下划线）: {self.child_skus_found} 个",
             f"  新建子 SKU: {self.created} 个",
             f"  更新子 SKU: {self.updated} 个",
             f"  跳过: {self.skipped} 个",
@@ -63,132 +65,119 @@ class SyncResult:
         return "\n".join(lines)
 
 
-# ── 解析 helpers ──────────────────────────────────────────────────────────────
+# ── 下划线后缀 → variant_note ───────────────────────────────────────────────
 
-def _parse_variant_note(aspects: dict[str, Any]) -> str:
-    """将 aspects dict 拼成人类可读字符串，按 key 字典序排序。
+_VARIANT_SUFFIX_MAP = {
+    "Da": "Color: Dark",
+    "Wh": "Color: White",
+    "Em": "Color: Emerald",
+    "RED": "Color: Red",
+    "BLUE": "Color: Blue",
+    "GREEN": "Color: Green",
+    "BLACK": "Color: Black",
+    "PK": "Color: Pink",
+    "S": "Size: S",
+    "M": "Size: M",
+    "L": "Size: L",
+    "XL": "Size: XL",
+    "XXL": "Size: XXL",
+    "SET": "Type: Set",
+    "04": "Size: 04",
+    "06": "Size: 06",
+    "08": "Size: 08",
+}
 
-    示例：{"Color": "Red", "Size": "M"} → "Color: Red, Size: M"
-    空 dict → ""
-    """
-    if not aspects:
+
+def _suffix_from_sku(sku: str) -> str:
+    """提取 SKU 最后一段下划线后缀。"""
+    if "_" not in sku:
         return ""
-    return ", ".join(f"{k}: {v}" for k, v in sorted(aspects.items()))
+    return sku.split("_")[-1]
 
 
-def _extract_variants_from_listing(listing: EbayListing) -> list[dict]:
-    """从 EbayListing.variants JSON 提取所有子 SKU 和 aspects。
+def _parent_sku_from_child(child_sku: str) -> str:
+    """从子 SKU 反推父 SKU：去掉最后一个下划线后缀。"""
+    if "_" not in child_sku:
+        return child_sku
+    parts = child_sku.rsplit("_", 1)
+    return parts[0]
 
-    支持两种格式（见 Brief §4.1）：
-      格式 A: {"variantSKUs": [...], "aspects": {"SKU": {...}, ...}}
-      格式 B: {"variations": [{"sku": "...", "aspects": {...}}, ...]}
-      格式 C: 其他/空 → []
 
-    TODO (Brief §4.1): 真实数据样本回来后补充 parser。
-    在拿到真实 variants JSON 样本前，这里返回空列表。
-    """
-    raw = listing.variants
-    if not raw or raw in ("{}", "null", "[]"):
-        return []
-
-    try:
-        data = json.loads(raw) if isinstance(raw, str) else raw
-    except (json.JSONDecodeError, TypeError):
-        log.warning("EbayListing {} variants JSON 解析失败: {}", listing.sku, raw)
-        return []
-
-    # 格式 A: InventoryItemGroup 格式
-    if "variantSKUs" in data and "aspects" in data:
-        results = []
-        for sku in data["variantSKUs"]:
-            aspects = data["aspects"].get(sku, {})
-            results.append({"sku": sku, "aspects": aspects})
-        return results
-
-    # 格式 B: 嵌套数组格式
-    if "variations" in data:
-        return [
-            {"sku": v.get("sku"), "aspects": v.get("aspects", {})}
-            for v in data["variations"]
-            if v.get("sku")
-        ]
-
-    # 未知格式，记录但不 crash
-    log.warning("EbayListing {} variants 格式未知: {}", listing.sku, list(data.keys()))
-    return []
+def _build_variant_note(suffix: str) -> str:
+    """将下划线后缀转为人类可读 variant_note。"""
+    known = _VARIANT_SUFFIX_MAP.get(suffix)
+    if known:
+        return known
+    # 未知后缀：直接用原始后缀
+    return f"Variant: {suffix}"
 
 
 # ── 主类 ──────────────────────────────────────────────────────────────────────
 
 class VariantSkuSyncer:
-    def sync_from_ebay_listings(self, *, dry_run: bool = False) -> SyncResult:
+    def sync_from_order_items(self, *, dry_run: bool = False) -> SyncResult:
+        """从 order_items 里的子 SKU（下划线模式）反向推导父子关系，upsert 到 products。"""
         result = SyncResult(dry_run=dry_run)
 
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
         with get_session() as sess:
-            # 拉所有有 variants 的 listing
-            listings = sess.execute(
-                select(EbayListing).where(
-                    EbayListing.variants.isnot(None),
-                    EbayListing.variants != "{}",
-                    EbayListing.variants != "null",
-                    EbayListing.variants != "[]",
-                )
+            # 拉所有含下划线的子 SKU（去重）
+            rows = sess.execute(
+                select(OrderItem.sku)
+                .distinct()
             ).scalars().all()
 
-            result.listings_with_variants = len(listings)
+            # 过滤：只取含下划线的 SKU（Python 层二次过滤，防止 SQL LIKE escape 不一致）
+            child_skus = list({s for s in rows if "_" in s})
+            result.child_skus_found = len(child_skus)
 
-            if not listings:
-                log.info("EbayListing 没有带 variants 的记录")
+            if not child_skus:
+                log.info("order_items 没有含下划线的子 SKU")
                 return result
 
             # 全量 product 拉入内存（按 sku 索引）
             all_products = {p.sku: p for p in sess.execute(select(Product)).scalars().all()}
+            all_parent_skus = set(all_products.keys())
 
-            for listing in listings:
-                variants = _extract_variants_from_listing(listing)
-                for variant in variants:
-                    child_sku = variant.get("sku")
-                    if not child_sku:
-                        continue
+            for child_sku in child_skus:
+                parent_candidate = _parent_sku_from_child(child_sku)
+                suffix = _suffix_from_sku(child_sku)
+                variant_note = _build_variant_note(suffix)
 
-                    parent_sku = listing.sku
-                    variant_note = _parse_variant_note(variant.get("aspects", {}))
+                # 路由：父 SKU 不在 products 表 → 跳过
+                if parent_candidate not in all_parent_skus:
+                    result.skipped += 1
+                    result.skipped_detail.append({
+                        "sku": child_sku,
+                        "parent_sku": parent_candidate,
+                        "reason": f"父 SKU {parent_candidate} 不在 products 表",
+                    })
+                    continue
 
-                    # 路由：父 SKU 不在 products 表 → 跳过
-                    if parent_sku not in all_products:
-                        result.skipped += 1
-                        result.skipped_detail.append({
-                            "sku": child_sku,
-                            "parent_sku": parent_sku,
-                            "reason": f"父 SKU {parent_sku} 不在 products 表",
-                        })
-                        continue
-
-                    if child_sku in all_products:
-                        # 已存在：更新 parent_sku + variant_note（幂等）
-                        if not dry_run:
-                            p = all_products[child_sku]
-                            p.parent_sku = parent_sku
-                            p.variant_note = variant_note
+                if child_sku in all_products:
+                    # 已存在：更新 parent_sku + variant_note（幂等）
+                    if not dry_run:
+                        p = all_products[child_sku]
+                        p.parent_sku = parent_candidate
+                        p.variant_note = variant_note
                         result.updated += 1
-                    else:
-                        # 不存在：创建子 SKU
-                        if not dry_run:
-                            sess.add(Product(
-                                sku=child_sku,
-                                parent_sku=parent_sku,
-                                variant_note=variant_note,
-                                asin=None,
-                                cost_price=None,
-                                cost_currency="JPY",
-                                supplier=None,
-                                title=None,
-                                source_url=None,
-                                status=ProductStatus.ACTIVE,
-                            ))
-                            all_products[child_sku] = all_products.get(child_sku)  # placeholder
+                else:
+                    # 不存在：创建子 SKU
+                    if not dry_run:
+                        sess.add(Product(
+                            sku=child_sku,
+                            parent_sku=parent_candidate,
+                            variant_note=variant_note,
+                            asin=None,
+                            cost_price=None,
+                            cost_currency="JPY",
+                            supplier=None,
+                            title=None,
+                            source_url=None,
+                            status=ProductStatus.ACTIVE,
+                        ))
+                        all_products[child_sku] = all_products.get(child_sku)  # placeholder
                         result.created += 1
 
         # 写报告
@@ -196,6 +185,11 @@ class VariantSkuSyncer:
         result.summary_path = self._write_summary(result)
 
         return result
+
+    # 兼容 Brief §T3 的旧接口名
+    def sync_from_ebay_listings(self, *, dry_run: bool = False) -> SyncResult:
+        """兼容别名：实际从 order_items 拉数据（eBay API 无变体数据）。"""
+        return self.sync_from_order_items(dry_run=dry_run)
 
     def _write_skipped(self, skipped: list[dict]) -> Path:
         path = OUTPUT_DIR / "variant_sync_skipped.csv"
