@@ -69,6 +69,20 @@ class SyncService:
         result.total_on_ebay = len(all_items)
         log.info(f"eBay 返回 {result.total_on_ebay} 条 inventory items")
 
+        # 拉 InventoryItemGroup（含变体父子关系），merge 到 items
+        try:
+            group_map = self._fetch_all_inventory_groups()  # {groupSku: groupData}
+            log.info(f"eBay 返回 {len(group_map)} 个 InventoryItemGroup")
+        except Exception as exc:
+            log.warning(f"拉取 InventoryItemGroup 失败（variants 将为空）: {exc}")
+            group_map = {}
+
+        # merge group variants into items（按 sku 匹配）
+        for item in all_items:
+            sku = item.get("sku", "")
+            if sku in group_map:
+                item["variants"] = group_map[sku]
+
         # 收集 eBay 上当前所有 sku
         current_skus = {item["sku"] for item in all_items if item.get("sku")}
 
@@ -77,8 +91,8 @@ class SyncService:
         variant_samples = []
         for item in all_items:
             try:
-                # 检查 variants 是否非空（用于 dry-run 统计）
-                raw_variants = item.get("variants") or item.get("variantSummaries")
+                # 检查 variants 是否非空（来自 InventoryItemGroup）
+                raw_variants = item.get("variants")
                 has_variants = raw_variants not in (None, {}, "null", "[]")
                 if has_variants:
                     listings_with_variants += 1
@@ -146,6 +160,34 @@ class SyncService:
 
         return items
 
+    def _fetch_all_inventory_groups(self) -> dict[str, dict]:
+        """分页拉取所有 InventoryItemGroup，返回 {groupSku: groupData} 字典。
+
+        eBay API: GET /sell/inventory/v1/inventory_item_group
+        响应: { total: int, groups: [...] }
+        每个 group 包含 variantSKUs 和 aspects。
+        """
+        groups: list[dict] = []
+        offset = 0
+
+        while True:
+            resp = self.client.get(
+                "/sell/inventory/v1/inventory_item_group",
+                params={"offset": offset, "limit": PAGE_SIZE},
+            )
+            batch = resp.get("groups", [])
+            if not batch:
+                break
+            groups.extend(batch)
+            total = resp.get("total", 0)
+            log.debug(f"  Group page offset={offset}: {len(batch)} 条 (累计 {len(groups)}/{total})")
+            if len(groups) >= total:
+                break
+            offset += PAGE_SIZE
+
+        # 返回 {groupSku: groupData}，方便按 sku 查
+        return {g.get("sku", ""): g for g in groups if g.get("sku")}
+
     def _upsert_listing(self, item: dict, dry_run: bool = False) -> bool:
         """将一条 eBay inventory item upsert 到 EbayListing 表。
 
@@ -178,8 +220,8 @@ class SyncService:
 
         now = datetime.now(timezone.utc)
 
-        # 提取 variants（多属性变体信息）
-        raw_variants = item.get("variants") or item.get("variantSummaries")
+        # 提取 variants（来自 InventoryItemGroup，已通过 merge_groups 注入）
+        raw_variants = item.get("variants")
 
         with get_session() as sess:
             existing = sess.query(EbayListing).filter(
