@@ -5,20 +5,16 @@ AmazonCostImporter 单元测试（Brief 2）
 from __future__ import annotations
 
 import csv
-from datetime import date
 from decimal import Decimal
-from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-
 from core.models import Product, ProductStatus, SupplierPriceHistory
 from core.models.base import Base
 from modules.finance.amazon_cost_importer import AmazonCostImporter
-
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -346,7 +342,7 @@ class TestAmazonCostImporter:
             mock_sess.return_value.__enter__ = MagicMock(return_value=in_memory_db)
             mock_sess.return_value.__exit__ = MagicMock(return_value=False)
             importer = AmazonCostImporter(output_dir=new_dir)
-            result = importer.import_csv(csv_path)
+            importer.import_csv(csv_path)
 
         assert new_dir.exists()
         assert (new_dir / "import_summary.txt").exists()

@@ -7,7 +7,6 @@ modules/finance/amazon_cost_importer.py
 """
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -198,8 +197,6 @@ class AmazonCostImporter:
                     result.cost_upserted += 1
                     result.upserted_amount_jpy += amount
 
-                # 小延迟，防 DB 锁
-                time.sleep(0.01)
 
         # 输出报告
         result.ambiguous_csv = self._write_csv("ambiguous_costs.csv", ambiguous_rows)
